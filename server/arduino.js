@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { cacheId, readCache, sketchContentHash, writeCache } from "./cache.js";
 import { resolveSkuSketch } from "./git.js";
 
 const execFileAsync = promisify(execFile);
@@ -102,6 +103,10 @@ export const ESPTOOL = resolveEsptool();
 const isEsptoolExe = (file) => /\.exe$/i.test(file) || !/\.py$/i.test(file);
 
 export const FQBN = process.env.SOS_FQBN || "esp32:esp32:esp32:PartitionScheme=huge_app";
+export const SERIAL_BAUD = Number(process.env.SOS_SERIAL_BAUD) || 115200;
+export const SERIAL_CAPTURE_MS = Number(process.env.SOS_SERIAL_CAPTURE_MS) || 15000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const execOptions = (timeout) => ({
   timeout,
@@ -146,11 +151,16 @@ const runStream = (command, args, options = {}) =>
 
     const timer = setTimeout(() => {
       child.kill();
-      reject(new Error(`Timed out after ${options.timeout ?? 120000}ms`));
+      const error = new Error(`Timed out after ${options.timeout ?? 120000}ms`);
+      error.stdout = combined;
+      error.log = combined;
+      reject(error);
     }, options.timeout ?? 120000);
 
     child.on("error", (error) => {
       clearTimeout(timer);
+      error.stdout = combined;
+      error.log = combined;
       reject(error);
     });
 
@@ -165,6 +175,7 @@ const runStream = (command, args, options = {}) =>
       }
       const error = new Error(combined.slice(-4000) || `Command failed (${code})`);
       error.stdout = combined;
+      error.log = combined;
       reject(error);
     });
   });
@@ -423,16 +434,44 @@ export const identifyPort = async (port, onProgress) => {
 
 export const compileSku = async (sku, onProgress, options = {}) => {
   const sketch = await resolveSkuSketch(sku, options.sha || null);
+  const files = sketch.files?.length ? sketch.files : [sketch];
+  const sha = options.sha || sketch.sha || null;
+  const contentHash = sketchContentHash(files);
+  const id = cacheId({ sku: sku.id, sha, contentHash, fqbn: FQBN });
+  const versionLabel = sha ? ` @ ${sha.slice(0, 7)}` : " (working tree)";
+  const cached = readCache(sku.id, id);
+
+  if (cached) {
+    const bytes = cached.manifest.bytes ?? null;
+    const hit = `cache hit ${sku.id}${versionLabel} (${bytes ? `${bytes.toLocaleString()} bytes` : "binaries"})`;
+    options.onLog?.(hit);
+    emitProgress(onProgress, {
+      phase: "compile",
+      percent: 65,
+      label: `Using cached firmware${versionLabel}`,
+      detail: cached.outDir,
+    });
+    return {
+      work: null,
+      sketchDir: null,
+      outputDir: cached.outDir,
+      log: cached.manifest.log || hit,
+      bytes,
+      cached: true,
+    };
+  }
+
   const work = fs.mkdtempSync(path.join(os.tmpdir(), `sos-${sku.id}-`));
   const sketchDir = path.join(work, path.basename(sketch.fileName, ".ino"));
+  const outputDir = path.join(work, "out");
   fs.mkdirSync(sketchDir);
-  for (const file of sketch.files?.length ? sketch.files : [sketch]) {
+  fs.mkdirSync(outputDir);
+  for (const file of files) {
     fs.writeFileSync(path.join(sketchDir, file.fileName), file.contents);
   }
 
   let percent = 20;
   let lastGeneric = 0;
-  const versionLabel = sketch.sha ? ` @ ${sketch.sha.slice(0, 7)}` : " (working tree)";
   emitProgress(onProgress, {
     phase: "compile",
     percent,
@@ -443,10 +482,11 @@ export const compileSku = async (sku, onProgress, options = {}) => {
   try {
     const log = await runStream(
       ARDUINO_CLI,
-      ["compile", "--fqbn", FQBN, "--warnings", "none", sketchDir],
+      ["compile", "--fqbn", FQBN, "--warnings", "none", "--output-dir", outputDir, sketchDir],
       {
         timeout: 300000,
         onLine: (line) => {
+          options.onLog?.(line);
           if (/Compiling sketch/i.test(line)) {
             percent = Math.max(percent, 28);
             emitProgress(onProgress, { phase: "compile", percent, label: "Compiling sketch", detail: line });
@@ -488,38 +528,63 @@ export const compileSku = async (sku, onProgress, options = {}) => {
       }
     );
     const sizeMatch = log.match(/Sketch uses (\d+) bytes/);
+    const bytes = sizeMatch ? Number(sizeMatch[1]) : null;
+    writeCache({
+      sku: sku.id,
+      id,
+      outDir: outputDir,
+      manifest: {
+        sku: sku.id,
+        sha,
+        contentHash: sha ? null : contentHash,
+        fqbn: FQBN,
+        bytes,
+        compiledAt: new Date().toISOString(),
+        log,
+      },
+    });
     emitProgress(onProgress, {
       phase: "compile",
       percent: 65,
-      label: sizeMatch ? `Compiled ${Number(sizeMatch[1]).toLocaleString()} bytes` : "Compile complete",
-      detail: "",
+      label: bytes ? `Compiled ${bytes.toLocaleString()} bytes` : "Compile complete",
+      detail: "cached for next flash",
     });
     return {
       work,
       sketchDir,
+      outputDir,
       log,
-      bytes: sizeMatch ? Number(sizeMatch[1]) : null,
+      bytes,
+      cached: false,
     };
   } catch (error) {
     fs.rmSync(work, { recursive: true, force: true });
-    const detail = `${error.stdout || ""}${error.stderr || error.message}`;
-    throw new Error(detail.slice(-4000));
+    const log = error.stdout || error.log || error.message || "";
+    const wrapped = new Error((log || "Compile failed").slice(-4000));
+    wrapped.log = log;
+    wrapped.phase = "compile";
+    throw wrapped;
   }
 };
 
-export const uploadSketch = async (sketchDir, port, onProgress) => {
+export const uploadSketch = async (sketchDir, port, onProgress, onLog, options = {}) => {
+  const inputDir = options.inputDir;
   emitProgress(onProgress, {
     phase: "upload",
     percent: 68,
     label: `Uploading to ${port}`,
-    detail: "",
+    detail: inputDir ? "cached binaries" : "",
   });
+  const args = inputDir
+    ? ["upload", "-p", port, "--fqbn", FQBN, "--input-dir", inputDir]
+    : ["upload", "-p", port, "--fqbn", FQBN, sketchDir];
   const log = await runStream(
     ARDUINO_CLI,
-    ["upload", "-p", port, "--fqbn", FQBN, sketchDir],
+    args,
     {
       timeout: 180000,
       onLine: (line) => {
+        onLog?.(line);
         const written = line.match(/\((\d+)\s*%\)/);
         if (written) {
           const flashPct = Number(written[1]);
@@ -548,6 +613,139 @@ export const uploadSketch = async (sketchDir, port, onProgress) => {
     }
   );
   return log;
+};
+
+const killProcess = (child) => {
+  if (!child?.pid) {
+    return;
+  }
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    return;
+  }
+  child.kill("SIGTERM");
+};
+
+export const runMonitor = (port, options = {}) =>
+  new Promise((resolve, reject) => {
+    const baud = options.baud || SERIAL_BAUD;
+    const child = spawn(
+      ARDUINO_CLI,
+      ["monitor", "-p", port, "-c", `baudrate=${baud}`, "--quiet", "--timestamp"],
+      {
+        env: process.env,
+        windowsHide: true,
+      }
+    );
+    let combined = "";
+    let lineBuf = "";
+    let settled = false;
+    let killedByUs = false;
+    let timer = null;
+
+    const finish = (ok, error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      options.signal?.removeEventListener("abort", onAbort);
+      if (ok) {
+        resolve(combined.trim());
+        return;
+      }
+      const wrapped = error || new Error("Monitor failed");
+      wrapped.log = combined;
+      wrapped.stdout = combined;
+      wrapped.phase = "serial";
+      reject(wrapped);
+    };
+
+    const stop = () => {
+      killedByUs = true;
+      killProcess(child);
+    };
+
+    const onAbort = () => stop();
+
+    const handleChunk = (chunk) => {
+      const text = chunk.toString();
+      combined += text;
+      lineBuf += text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      const lines = lineBuf.split("\n");
+      lineBuf = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          options.onLog?.(trimmed);
+        }
+      }
+    };
+
+    child.stdout.on("data", handleChunk);
+    child.stderr.on("data", handleChunk);
+
+    child.on("error", (error) => finish(false, error));
+    child.on("close", (code) => {
+      if (lineBuf.trim()) {
+        options.onLog?.(lineBuf.trim());
+        combined += combined.endsWith(lineBuf) ? "" : lineBuf;
+      }
+      if (killedByUs || options.signal?.aborted) {
+        finish(true);
+        return;
+      }
+      if (code === 0) {
+        finish(true);
+        return;
+      }
+      finish(false, new Error(combined.slice(-4000) || `Monitor exited (${code})`));
+    });
+
+    if (options.durationMs) {
+      timer = setTimeout(stop, options.durationMs);
+    }
+    if (options.signal) {
+      if (options.signal.aborted) {
+        stop();
+      } else {
+        options.signal.addEventListener("abort", onAbort);
+      }
+    }
+  });
+
+export const captureSerial = async (port, onProgress, onLog, options = {}) => {
+  const durationMs = options.durationMs ?? SERIAL_CAPTURE_MS;
+  const baud = options.baud ?? SERIAL_BAUD;
+  emitProgress(onProgress, {
+    phase: "serial",
+    percent: 99,
+    label: `Serial ${port} @ ${baud}`,
+    detail: `${Math.round(durationMs / 1000)}s boot capture`,
+  });
+  await sleep(options.settleMs ?? 1500);
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await runMonitor(port, {
+        baud,
+        durationMs,
+        onLog,
+        signal: options.signal,
+      });
+    } catch (error) {
+      lastError = error;
+      onLog?.(`monitor retry ${attempt}: ${error.message}`);
+      await sleep(1000);
+    }
+  }
+  throw lastError || new Error("Serial monitor failed");
 };
 
 export const cleanupWork = (work) => {

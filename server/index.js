@@ -6,19 +6,26 @@ import { getSku } from "./skus.js";
 import {
   ESPTOOL,
   FQBN,
+  SERIAL_BAUD,
+  captureSerial,
   cleanupWork,
   compileSku,
   identifyPort,
   listPorts,
+  runMonitor,
   uploadSketch,
 } from "./arduino.js";
 import {
+  formatFlashLog,
+  getFlash,
   insertFlash,
   listBoards,
   listFlashes,
   setBoardMeta,
+  updateFlashAccept,
   upsertBoard,
 } from "./db.js";
+import { gradeAndInterpret, listAcceptSteps } from "./accept.js";
 
 const app = express();
 const port = Number(process.env.PORT) || 3848;
@@ -50,6 +57,36 @@ const progressToEvent = (event) => ({
   label: event.label || "",
   detail: event.detail || "",
 });
+
+const createLogStreamer = (res) => {
+  let buffer = "";
+  let lastPhase = "";
+  let timer = null;
+  const flush = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (!buffer) {
+      return;
+    }
+    writeSse(res, { type: "log", text: buffer });
+    buffer = "";
+  };
+  return {
+    append: (phase, line) => {
+      if (phase && phase !== lastPhase) {
+        lastPhase = phase;
+        buffer += `\n=== ${phase} ===\n`;
+      }
+      buffer += `${line}\n`;
+      if (!timer) {
+        timer = setTimeout(flush, 80);
+      }
+    },
+    flush,
+  };
+};
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, fqbn: FQBN, esptool: ESPTOOL });
@@ -108,6 +145,33 @@ app.get("/api/flashes", (req, res) => {
   res.json(listFlashes(typeof req.query.mac === "string" ? req.query.mac : null));
 });
 
+app.get("/api/accept/:sku", (req, res) => {
+  res.json({
+    sku: req.params.sku,
+    steps: listAcceptSteps(req.params.sku).map((step) => ({
+      id: step.id,
+      label: step.label,
+      required: step.required !== false,
+    })),
+  });
+});
+
+app.get("/api/flashes/:id/log", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).type("text/plain").send("Invalid flash id\n");
+    return;
+  }
+  const row = getFlash(id);
+  if (!row) {
+    res.status(404).type("text/plain").send("Flash not found\n");
+    return;
+  }
+  const part = typeof req.query.part === "string" ? req.query.part : "all";
+  res.setHeader("Content-Disposition", `inline; filename="flash-${id}.log"`);
+  res.type("text/plain; charset=utf-8").send(formatFlashLog(row, part));
+});
+
 app.patch("/api/boards/:mac", (req, res) => {
   const ok = setBoardMeta(req.params.mac, {
     slot: req.body.slot,
@@ -159,7 +223,10 @@ app.post("/api/flash", async (req, res) => {
   const requestedSha = typeof req.body.sha === "string" && req.body.sha ? req.body.sha : null;
   let work = null;
   let mac = req.body.mac || null;
+  let compileLog = "";
+  let uploadLog = "";
   openSse(res);
+  const logStream = createLogStreamer(res);
   const onProgress = (event) => writeSse(res, progressToEvent(event));
 
   try {
@@ -174,14 +241,21 @@ app.post("/api/flash", async (req, res) => {
       usbSerial: req.body.usbSerial,
     });
 
-    const compiled = await compileSku(sku, onProgress, { sha: requestedSha });
+    const compiled = await compileSku(sku, onProgress, {
+      sha: requestedSha,
+      onLog: (line) => logStream.append("compile", line),
+    });
     work = compiled.work;
-    const uploadLog = await uploadSketch(compiled.sketchDir, serialPort, onProgress);
+    compileLog = compiled.log;
+    uploadLog = await uploadSketch(compiled.sketchDir, serialPort, onProgress, (line) =>
+      logStream.append("upload", line),
+      { inputDir: compiled.outputDir }
+    );
 
     const gitSha = requestedSha ? requestedSha.slice(0, 7) : git.shortSha;
     const gitDirty = requestedSha ? false : git.dirty;
 
-    insertFlash({
+    const flashId = insertFlash({
       mac,
       sku: sku.id,
       gitSha,
@@ -190,19 +264,45 @@ app.post("/api/flash", async (req, res) => {
       fqbn: FQBN,
       success: true,
       compileBytes: compiled.bytes,
+      compileLog,
+      uploadLog,
       startedAt,
       finishedAt: new Date().toISOString(),
     });
 
+    let serialLog = "";
+    let accept = null;
+    try {
+      serialLog = await captureSerial(serialPort, onProgress, (line) => logStream.append("serial", line));
+    } catch (serialError) {
+      serialLog = serialError.log || serialError.message || "";
+      logStream.append("serial", serialError.message);
+    }
+    accept = await gradeAndInterpret(sku.id, serialLog);
+    logStream.append(
+      "accept",
+      `${accept.score} ${accept.grade}: ${accept.summary}${accept.llm ? `\n${accept.llm}` : ""}`
+    );
+    updateFlashAccept(flashId, accept, serialLog);
+    logStream.flush();
+
+    const acceptLabel = `Accept ${accept.score} ${accept.grade}${accept.grade === "fail" ? ` — ${accept.summary}` : ""}`;
     writeSse(
       res,
-      progressToEvent({ phase: "done", percent: 100, label: `Wrote ${sku.id} to ${mac}` })
+      progressToEvent({
+        phase: "done",
+        percent: 100,
+        label: `Wrote ${sku.id} to ${mac} · ${acceptLabel}`,
+      })
     );
     writeSse(res, {
       type: "result",
-      ok: true,
+      ok: accept.grade !== "fail",
       mac,
       sku: sku.id,
+      flashId,
+      cached: Boolean(compiled.cached),
+      accept,
       git: {
         ...git,
         shortSha: gitSha,
@@ -213,13 +313,18 @@ app.post("/api/flash", async (req, res) => {
           : git.subject,
       },
       bytes: compiled.bytes,
-      compileLog: compiled.log.slice(-2000),
-      uploadLog: uploadLog.slice(-2000),
     });
   } catch (error) {
+    logStream.flush();
+    if (error.phase === "compile") {
+      compileLog = error.log || compileLog;
+    } else if (error.stdout || error.log) {
+      uploadLog = error.stdout || error.log;
+    }
+    let flashId = null;
     if (mac) {
       const git = await getGitInfo();
-      insertFlash({
+      flashId = insertFlash({
         mac,
         sku: sku.id,
         gitSha: requestedSha ? requestedSha.slice(0, 7) : git.shortSha || git.sha,
@@ -228,15 +333,66 @@ app.post("/api/flash", async (req, res) => {
         fqbn: FQBN,
         success: false,
         error: error.message.slice(0, 2000),
+        compileLog,
+        uploadLog,
         startedAt,
         finishedAt: new Date().toISOString(),
       });
     }
-    writeSse(res, { type: "error", error: error.message, mac });
+    writeSse(res, { type: "error", error: error.message, mac, flashId });
   } finally {
     cleanupWork(work);
     busy = null;
     res.end();
+  }
+});
+
+app.post("/api/monitor", async (req, res) => {
+  const serialPort = req.body.port;
+  if (!serialPort) {
+    res.status(400).json({ error: "port is required" });
+    return;
+  }
+  if (busy) {
+    res.status(409).json({ error: `Busy: ${busy}` });
+    return;
+  }
+
+  busy = `monitor ${serialPort}`;
+  const abort = new AbortController();
+  res.on("close", () => abort.abort());
+  openSse(res);
+  const logStream = createLogStreamer(res);
+  writeSse(
+    res,
+    progressToEvent({
+      phase: "serial",
+      percent: 100,
+      label: `Serial ${serialPort} @ ${SERIAL_BAUD}`,
+      detail: "Listening…",
+    })
+  );
+
+  try {
+    await runMonitor(serialPort, {
+      baud: Number(req.body.baud) || SERIAL_BAUD,
+      signal: abort.signal,
+      onLog: (line) => logStream.append("serial", line),
+    });
+    logStream.flush();
+    if (!res.writableEnded) {
+      writeSse(res, { type: "result", ok: true });
+    }
+  } catch (error) {
+    logStream.flush();
+    if (!res.writableEnded) {
+      writeSse(res, { type: "error", error: error.message });
+    }
+  } finally {
+    busy = null;
+    if (!res.writableEnded) {
+      res.end();
+    }
   }
 });
 
