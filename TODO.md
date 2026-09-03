@@ -23,9 +23,9 @@ LLM is optional: set `SOS_LLM_KEY` or `OPENAI_API_KEY` to add a short interpreta
 
 Slot is notes in SQLite; the chip still learns identity via captive portal / NVS. After a passing flash, write slot / hostname / optional WiFi from the bench. Portal stays for field reconfig.
 
-## 4. [todo] Production is the ledger; SQLite is a local queue
+## 4. [done] Kiosk ledger is Postgres
 
-Push identify / flash / verdict (MAC, SKU, SHA, slot, serial grade, logs, station, operator) to the production API as it happens. Retry from sqlite if the network is down. MAC remains the key.
+`kiosks` is the primary table (ESP32 factory MAC unique). `flashes` belong to a kiosk. Local Docker Postgres is the bench ledger; SQLite is only imported once if `server/data/fleet.sqlite` still exists.
 
 ## 5. [todo] Pin the job to a chip, not a COM port
 

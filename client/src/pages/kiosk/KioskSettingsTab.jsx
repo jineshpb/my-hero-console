@@ -14,7 +14,7 @@ export const KioskSettingsTab = () => {
     portsLoading,
     port,
     setPort,
-    handleSaveBoard,
+    handleSaveKiosk,
     setError,
   } = useKiosk();
   const [slotDraft, setSlotDraft] = useState(board.slot || "");
@@ -28,7 +28,7 @@ export const KioskSettingsTab = () => {
   const handleSaveMeta = async (event) => {
     event.preventDefault();
     try {
-      await handleSaveBoard(board.mac, { slot: slotDraft, notes: notesDraft });
+      await handleSaveKiosk(board.mac, { slot: slotDraft, notes: notesDraft });
     } catch (err) {
       setError(err.message);
     }

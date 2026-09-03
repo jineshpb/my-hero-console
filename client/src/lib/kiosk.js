@@ -10,6 +10,9 @@ export const normalizeSlot = (slot) => {
 };
 
 export const kioskName = (board) => {
+  if (board?.name) {
+    return board.name;
+  }
   const slot = normalizeSlot(board?.slot);
   return slot ? `my-hro-kiosk-${slot}` : "Unassigned";
 };

@@ -20,9 +20,11 @@ USB-only bench UI: pick a SKU, identify the chip, flash with Arduino CLI, keep w
 
 Identity is the **ESP32 factory Wi-Fi MAC** (`esptool read_mac`), not the USB-UART serial. CH340 clones often share one USB serial number.
 
-History lives in `server/data/fleet.sqlite` (gitignored). Copy that file if you want the same history on another machine.
+History lives in **Postgres** (`kiosks` + `flashes`). Start it with `npm run db:up` (Docker). Default URL: `postgres://myhero:myhero@127.0.0.1:5432/myhero`. Override with `DATABASE_URL`.
 
-Kit slot / hostname / secrets still live in NVS on the device (captive portal / `/config`). After a flash, optionally **Edit** the board in the UI and set slot `01`–`05` so the MAC maps to a kit in the ledger.
+On first boot, existing `server/data/fleet.sqlite` is imported into Postgres and left in place as a backup.
+
+Kit slot / hostname / secrets still live in NVS on the device (captive portal / `/config`). After a flash, set slot `01`–`05` in Settings so the MAC maps to `my-hro-kiosk-nn`.
 
 ## SKUs
 

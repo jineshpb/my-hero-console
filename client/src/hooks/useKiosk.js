@@ -7,7 +7,7 @@ export const useKiosk = () => {
   const { kioskId } = useParams();
   const consoleState = useConsole();
   const mac = kioskIdToMac(kioskId);
-  const board = consoleState.boards.find((item) => item.mac === mac);
+  const board = consoleState.kiosks.find((item) => item.mac === mac);
   const kioskFlashes = useMemo(
     () => consoleState.flashes.filter((row) => row.mac === mac),
     [consoleState.flashes, mac]

@@ -4,8 +4,10 @@ Flashes SKUs from a **separate firmware git**. Point the UI at that URL (or a lo
 
 ```bash
 npm install
+npm run db:up
 npm run dev
 ```
 
 - UI: http://127.0.0.1:5174
 - API: http://127.0.0.1:3848
+- Postgres: `postgres://myhero:myhero@127.0.0.1:5432/myhero` (`DATABASE_URL` to override)

@@ -18,12 +18,13 @@ import {
 import {
   formatFlashLog,
   getFlash,
+  initDb,
   insertFlash,
-  listBoards,
   listFlashes,
-  setBoardMeta,
+  listKiosks,
+  setKioskMeta,
   updateFlashAccept,
-  upsertBoard,
+  upsertKiosk,
 } from "./db.js";
 import { gradeAndInterpret, listAcceptSteps } from "./accept.js";
 
@@ -137,12 +138,16 @@ app.get("/api/ports", async (_req, res) => {
   }
 });
 
-app.get("/api/boards", (_req, res) => {
-  res.json(listBoards());
+app.get("/api/kiosks", async (_req, res) => {
+  res.json(await listKiosks());
 });
 
-app.get("/api/flashes", (req, res) => {
-  res.json(listFlashes(typeof req.query.mac === "string" ? req.query.mac : null));
+app.get("/api/boards", async (_req, res) => {
+  res.json(await listKiosks());
+});
+
+app.get("/api/flashes", async (req, res) => {
+  res.json(await listFlashes(typeof req.query.mac === "string" ? req.query.mac : null));
 });
 
 app.get("/api/accept/:sku", (req, res) => {
@@ -156,13 +161,13 @@ app.get("/api/accept/:sku", (req, res) => {
   });
 });
 
-app.get("/api/flashes/:id/log", (req, res) => {
+app.get("/api/flashes/:id/log", async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     res.status(400).type("text/plain").send("Invalid flash id\n");
     return;
   }
-  const row = getFlash(id);
+  const row = await getFlash(id);
   if (!row) {
     res.status(404).type("text/plain").send("Flash not found\n");
     return;
@@ -172,17 +177,20 @@ app.get("/api/flashes/:id/log", (req, res) => {
   res.type("text/plain; charset=utf-8").send(formatFlashLog(row, part));
 });
 
-app.patch("/api/boards/:mac", (req, res) => {
-  const ok = setBoardMeta(req.params.mac, {
+const patchKiosk = async (req, res) => {
+  const ok = await setKioskMeta(req.params.mac, {
     slot: req.body.slot,
     notes: req.body.notes,
   });
   if (!ok) {
-    res.status(404).json({ error: "Unknown board. Identify or flash it first." });
+    res.status(404).json({ error: "Unknown kiosk. Identify or flash it first." });
     return;
   }
   res.json({ ok: true });
-});
+};
+
+app.patch("/api/kiosks/:mac", patchKiosk);
+app.patch("/api/boards/:mac", patchKiosk);
 
 app.post("/api/identify", async (req, res) => {
   const serialPort = req.body.port;
@@ -193,7 +201,7 @@ app.post("/api/identify", async (req, res) => {
   openSse(res);
   try {
     const identity = await identifyPort(serialPort, (event) => writeSse(res, progressToEvent(event)));
-    upsertBoard({
+    await upsertKiosk({
       mac: identity.mac,
       chipModel: identity.chipModel,
       port: serialPort,
@@ -234,7 +242,7 @@ app.post("/api/flash", async (req, res) => {
     writeSse(res, progressToEvent({ phase: "identify", percent: 1, label: `Identify ${serialPort}` }));
     const identity = await identifyPort(serialPort, onProgress);
     mac = identity.mac;
-    upsertBoard({
+    await upsertKiosk({
       mac,
       chipModel: identity.chipModel,
       port: serialPort,
@@ -255,7 +263,7 @@ app.post("/api/flash", async (req, res) => {
     const gitSha = requestedSha ? requestedSha.slice(0, 7) : git.shortSha;
     const gitDirty = requestedSha ? false : git.dirty;
 
-    const flashId = insertFlash({
+    const flashId = await insertFlash({
       mac,
       sku: sku.id,
       gitSha,
@@ -283,7 +291,7 @@ app.post("/api/flash", async (req, res) => {
       "accept",
       `${accept.score} ${accept.grade}: ${accept.summary}${accept.llm ? `\n${accept.llm}` : ""}`
     );
-    updateFlashAccept(flashId, accept, serialLog);
+    await updateFlashAccept(flashId, accept, serialLog);
     logStream.flush();
 
     const acceptLabel = `Accept ${accept.score} ${accept.grade}${accept.grade === "fail" ? ` — ${accept.summary}` : ""}`;
@@ -324,7 +332,7 @@ app.post("/api/flash", async (req, res) => {
     let flashId = null;
     if (mac) {
       const git = await getGitInfo();
-      flashId = insertFlash({
+      flashId = await insertFlash({
         mac,
         sku: sku.id,
         gitSha: requestedSha ? requestedSha.slice(0, 7) : git.shortSha || git.sha,
@@ -395,6 +403,14 @@ app.post("/api/monitor", async (req, res) => {
     }
   }
 });
+
+try {
+  await initDb();
+} catch (error) {
+  console.error("Postgres is required. Start it with: npm run db:up");
+  console.error(error.message);
+  process.exit(1);
+}
 
 const server = app.listen(port, () => {
   console.log(`SOS fleet console API on http://127.0.0.1:${port}`);

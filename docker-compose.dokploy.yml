@@ -1,0 +1,25 @@
+# Postgres ledger for Dokploy. USB flashing stays on the bench; this is the database only.
+# Dokploy: Add Service → Compose → Docker Compose → compose path ./docker-compose.dokploy.yml
+# Environment: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_PORT
+# Do not set container_name. Schema is applied by the bench API on first connect.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-myhero}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-myhero}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - myhero-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  myhero-pg:

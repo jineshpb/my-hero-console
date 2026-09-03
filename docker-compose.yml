@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: myhero-console-pg
+    environment:
+      POSTGRES_USER: myhero
+      POSTGRES_PASSWORD: myhero
+      POSTGRES_DB: myhero
+    ports:
+      - "5432:5432"
+    volumes:
+      - myhero-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myhero -d myhero"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  myhero-pg:

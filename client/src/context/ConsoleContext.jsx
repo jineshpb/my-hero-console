@@ -11,7 +11,7 @@ export const ConsoleProvider = ({ children }) => {
   const emptyPortStreakRef = useRef(0);
   const [ports, setPorts] = useState([]);
   const [portsLoading, setPortsLoading] = useState(true);
-  const [boards, setBoards] = useState([]);
+  const [kiosks, setKiosks] = useState([]);
   const [flashes, setFlashes] = useState([]);
   const [skuId, setSkuId] = useState("combined");
   const [sha, setSha] = useState("");
@@ -66,13 +66,13 @@ export const ConsoleProvider = ({ children }) => {
   }, [applyPortList]);
 
   const refresh = useCallback(async () => {
-    const [gitInfo, skuList, portResult, boardList, flashList, versionResult, source] = await Promise.all([
+    const [gitInfo, skuList, portResult, kioskList, flashList, versionResult, source] = await Promise.all([
       api("/api/git"),
       api("/api/skus"),
       api("/api/ports")
         .then((list) => ({ list }))
         .catch(() => ({ list: null })),
-      api("/api/boards"),
+      api("/api/kiosks"),
       api("/api/flashes"),
       api("/api/versions")
         .then((payload) => payload)
@@ -82,7 +82,7 @@ export const ConsoleProvider = ({ children }) => {
     setGit(gitInfo);
     setSkus(skuList);
     setSkuId((current) => (skuList.some((item) => item.id === current) ? current : skuList[0]?.id || ""));
-    setBoards(boardList);
+    setKiosks(kioskList);
     setFlashes(flashList);
     if (portResult.list) {
       applyPortList(portResult.list);
@@ -379,9 +379,9 @@ export const ConsoleProvider = ({ children }) => {
     }
   };
 
-  const handleSaveBoard = async (mac, { slot, notes }) => {
+  const handleSaveKiosk = async (mac, { slot, notes }) => {
     setError("");
-    await api(`/api/boards/${encodeURIComponent(mac)}`, {
+    await api(`/api/kiosks/${encodeURIComponent(mac)}`, {
       method: "PATCH",
       body: JSON.stringify({ slot, notes }),
     });
@@ -394,7 +394,7 @@ export const ConsoleProvider = ({ children }) => {
       skus,
       ports,
       portsLoading,
-      boards,
+      kiosks,
       flashes,
       skuId,
       setSkuId,
@@ -433,7 +433,7 @@ export const ConsoleProvider = ({ children }) => {
       handleToggleLog,
       handlePull,
       handleSaveFirmwareSource,
-      handleSaveBoard,
+      handleSaveKiosk,
       setError,
     }),
     [
@@ -441,7 +441,7 @@ export const ConsoleProvider = ({ children }) => {
       skus,
       ports,
       portsLoading,
-      boards,
+      kiosks,
       flashes,
       skuId,
       sha,

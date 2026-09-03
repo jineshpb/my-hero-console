@@ -12,7 +12,7 @@ export const FlashPanel = () => {
   const {
     flashPanelOpen,
     setFlashPanelOpen,
-    boards,
+    kiosks,
     identity,
     skus,
     skuId,
@@ -34,8 +34,8 @@ export const FlashPanel = () => {
   const routeId = location.pathname.match(/^\/kiosks\/([^/]+)/)?.[1];
   const pageMac = routeId ? kioskIdToMac(routeId) : "";
   const target =
-    boards.find((board) => board.mac === identity?.mac) ||
-    boards.find((board) => board.mac === pageMac) ||
+    kiosks.find((board) => board.mac === identity?.mac) ||
+    kiosks.find((board) => board.mac === pageMac) ||
     null;
   const canClose = busy !== "flash";
 

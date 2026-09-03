@@ -14,7 +14,7 @@ export const KiosksPage = () => {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const {
-    boards,
+    kiosks: allKiosks,
     ports,
     portsLoading,
     port,
@@ -28,7 +28,7 @@ export const KiosksPage = () => {
 
   const kiosks = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return boards.filter((board) => {
+    return allKiosks.filter((board) => {
       if (!needle) {
         return true;
       }
@@ -38,7 +38,7 @@ export const KiosksPage = () => {
         .toLowerCase();
       return haystack.includes(needle);
     });
-  }, [boards, query]);
+  }, [allKiosks, query]);
 
   const handleIdentifyAndOpen = async () => {
     const result = await handleIdentify();
@@ -53,7 +53,7 @@ export const KiosksPage = () => {
         <div>
           <h1 className="text-2xl font-medium text-white">Kiosks</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {boards.length} SOS kiosk{boards.length === 1 ? "" : "s"} · identity is the ESP32 factory MAC
+            {allKiosks.length} SOS kiosk{allKiosks.length === 1 ? "" : "s"} · identity is the ESP32 factory MAC
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-2">
@@ -104,7 +104,7 @@ export const KiosksPage = () => {
       {kiosks.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            {boards.length === 0
+            {allKiosks.length === 0
               ? "Plug a board in and identify USB. Each kiosk is named my-hro-kiosk-nn after you assign a slot."
               : "No kiosks match that search."}
           </CardContent>
