@@ -1,6 +1,5 @@
-# App only. Postgres is the existing Dokploy service — set DATABASE_URL.
-# Internal host (Dokploy Postgres "Internal" URL) only resolves on dokploy-network.
-# Trial: `npm run trial`
+# Local trial of the same Dockerfile. Dokploy uses Application + Dockerfile, not this file.
+# `npm run trial` → http://127.0.0.1:3848
 
 services:
   app:
@@ -13,8 +12,6 @@ services:
       CLIENT_DIST: /app/client/dist
     ports:
       - "3848:3848"
-    networks:
-      - dokploy-network
     healthcheck:
       test:
         [
@@ -26,7 +23,3 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-
-networks:
-  dokploy-network:
-    external: true

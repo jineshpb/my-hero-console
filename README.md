@@ -14,9 +14,21 @@ Set `DATABASE_URL` in `.env` to the existing Dokploy Postgres. Do not start a se
 
 Kit heartbeat, SOS, and door POSTs: [API.md](API.md).
 
-## Trial (Docker)
+## Dokploy
 
-One `app` container that serves the UI and `/api`. Postgres is already on Dokploy. Identify/Flash still belong on the USB bench.
+Use an **Application** (Dockerfile), not Compose. Domains stay in the Domains tab.
+
+- GitHub `jineshpb/my-hero-console`, branch `main`
+- Build type: Dockerfile, file `Dockerfile`
+- Container port **3848**
+- Env: `DATABASE_URL` = the Postgres service **Internal** URL (port **5432**, not 5433)
+- Domain: `myhero.jineshb.app` (or whatever you set), port 3848
+
+Applications join `dokploy-network` on their own, so Traefik uses the file provider like Hello World. Remove or stop the Compose `kiosk` service after this is up, or the domain will clash.
+
+## Local Docker
+
+Same image as Dokploy. Postgres stays on Dokploy.
 
 ```bash
 docker compose up --build
