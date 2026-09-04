@@ -1,6 +1,6 @@
 # App only. Postgres is the existing Dokploy service — set DATABASE_URL.
-# Trial: `docker compose up --build`
-# Identify/Flash stay on the USB machine.
+# Internal host (Dokploy Postgres "Internal" URL) only resolves on dokploy-network.
+# Trial: `npm run trial`
 
 services:
   app:
@@ -13,6 +13,8 @@ services:
       CLIENT_DIST: /app/client/dist
     ports:
       - "3848:3848"
+    networks:
+      - dokploy-network
     healthcheck:
       test:
         [
@@ -24,3 +26,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+
+networks:
+  dokploy-network:
+    external: true

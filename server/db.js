@@ -194,70 +194,99 @@ const addKioskIdentityColumns = async (client) => {
   await client.query("ALTER TABLE kiosks ADD COLUMN IF NOT EXISTS last_door_at TIMESTAMPTZ");
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isTransientPgError = (error) => {
+  const code = error?.code || "";
+  const message = error?.message || "";
+  return (
+    code === "EAI_AGAIN" ||
+    code === "ENOTFOUND" ||
+    code === "ECONNREFUSED" ||
+    code === "ETIMEDOUT" ||
+    code === "ECONNRESET" ||
+    message.includes("EAI_AGAIN") ||
+    message.includes("ENOTFOUND") ||
+    message.includes("ECONNREFUSED") ||
+    message.includes("timeout")
+  );
+};
+
+const applySchema = async (client) => {
+  const existing = await client.query(
+    "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'kiosks'"
+  );
+  if (existing.rowCount) {
+    await addKioskIdentityColumns(client);
+  }
+  const schema = fs.readFileSync(schemaPath, "utf8");
+  for (const statement of schema
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)) {
+    await client.query(statement);
+  }
+  await addKioskIdentityColumns(client);
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS kiosks_slot_unique
+      ON kiosks (slot)
+      WHERE slot IS NOT NULL AND btrim(slot) <> ''
+  `);
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS kiosks_kit_id_unique
+      ON kiosks (kit_id)
+      WHERE kit_id IS NOT NULL AND btrim(kit_id) <> ''
+  `);
+  await client.query("ALTER TABLE heartbeats ADD COLUMN IF NOT EXISTS kit_id TEXT");
+  await client.query(`
+    UPDATE heartbeats h
+    SET kit_id = k.kit_id
+    FROM kiosks k
+    WHERE h.kiosk_id = k.id AND (h.kit_id IS NULL OR btrim(h.kit_id) = '')
+  `);
+  await client.query(`
+    UPDATE heartbeats
+    SET payload = payload - 'hash'
+    WHERE payload ? 'hash'
+  `);
+  await client.query("ALTER TABLE heartbeats ALTER COLUMN battery_percent TYPE NUMERIC(5,1) USING battery_percent::numeric");
+  await client.query("ALTER TABLE heartbeats ALTER COLUMN battery_voltage TYPE NUMERIC(8,3) USING battery_voltage::numeric");
+  await migrateSqliteIfEmpty(client);
+};
+
 export const initDb = async () => {
-  const preferred = process.env.DATABASE_URL || LOCAL_DATABASE_URL;
-  const urls = [...new Set([preferred, LOCAL_DATABASE_URL])];
+  const configured = (process.env.DATABASE_URL || "").trim();
+  const preferred = configured || LOCAL_DATABASE_URL;
+  const urls = configured ? [configured] : [...new Set([preferred, LOCAL_DATABASE_URL])];
+  const attempts = configured ? 8 : 1;
   let lastError;
 
   for (const url of urls) {
-    if (url !== DATABASE_URL) {
-      await pool.end().catch(() => {});
-      openPool(url);
-    }
-    try {
-      const client = await pool.connect();
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (url !== DATABASE_URL) {
+        await pool.end().catch(() => {});
+        openPool(url);
+      }
       try {
-        const existing = await client.query(
-          "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'kiosks'"
-        );
-        if (existing.rowCount) {
-          await addKioskIdentityColumns(client);
+        const client = await pool.connect();
+        try {
+          await applySchema(client);
+        } finally {
+          client.release();
         }
-        const schema = fs.readFileSync(schemaPath, "utf8");
-        for (const statement of schema
-          .split(";")
-          .map((part) => part.trim())
-          .filter(Boolean)) {
-          await client.query(statement);
-        }
-        await addKioskIdentityColumns(client);
-        await client.query(`
-          CREATE UNIQUE INDEX IF NOT EXISTS kiosks_slot_unique
-            ON kiosks (slot)
-            WHERE slot IS NOT NULL AND btrim(slot) <> ''
-        `);
-        await client.query(`
-          CREATE UNIQUE INDEX IF NOT EXISTS kiosks_kit_id_unique
-            ON kiosks (kit_id)
-            WHERE kit_id IS NOT NULL AND btrim(kit_id) <> ''
-        `);
-        await client.query("ALTER TABLE heartbeats ADD COLUMN IF NOT EXISTS kit_id TEXT");
-        await client.query(`
-          UPDATE heartbeats h
-          SET kit_id = k.kit_id
-          FROM kiosks k
-          WHERE h.kiosk_id = k.id AND (h.kit_id IS NULL OR btrim(h.kit_id) = '')
-        `);
-        await client.query(`
-          UPDATE heartbeats
-          SET payload = payload - 'hash'
-          WHERE payload ? 'hash'
-        `);
-        await client.query("ALTER TABLE heartbeats ALTER COLUMN battery_percent TYPE NUMERIC(5,1) USING battery_percent::numeric");
-        await client.query("ALTER TABLE heartbeats ALTER COLUMN battery_voltage TYPE NUMERIC(8,3) USING battery_voltage::numeric");
-        await migrateSqliteIfEmpty(client);
-      } finally {
-        client.release();
-      }
-      if (url !== preferred) {
-        console.warn(`Using local Postgres ${describeDb(url)}; remote ${describeDb(preferred)} is unreachable`);
-      } else {
         console.log(`Postgres ${describeDb(url)}`);
+        return;
+      } catch (error) {
+        lastError = error;
+        console.error(`Postgres ${describeDb(url)} failed: ${error.message}`);
+        if (attempt < attempts && isTransientPgError(error)) {
+          const wait = Math.min(2000 * attempt, 8000);
+          console.error(`Retrying ${describeDb(url)} in ${wait}ms (${attempt}/${attempts})`);
+          await sleep(wait);
+          await pool.end().catch(() => {});
+          openPool(url);
+        }
       }
-      return;
-    } catch (error) {
-      lastError = error;
-      console.error(`Postgres ${describeDb(url)} failed: ${error.message}`);
     }
   }
 

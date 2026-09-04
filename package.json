@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "concurrently -n api,ui -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
     "trial": "docker compose up --build",
+    "pretrial": "node -e \"const {execSync}=require('node:child_process'); try { execSync('docker network inspect dokploy-network',{stdio:'ignore'}); } catch { execSync('docker network create dokploy-network',{stdio:'inherit'}); }\"",
     "start": "npm run start -w server"
   },
   "devDependencies": {
