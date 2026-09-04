@@ -138,16 +138,24 @@ app.get("/api/ports", async (_req, res) => {
   }
 });
 
+const sendDb = async (res, work) => {
+  try {
+    res.json(await work());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 app.get("/api/kiosks", async (_req, res) => {
-  res.json(await listKiosks());
+  await sendDb(res, listKiosks);
 });
 
 app.get("/api/boards", async (_req, res) => {
-  res.json(await listKiosks());
+  await sendDb(res, listKiosks);
 });
 
 app.get("/api/flashes", async (req, res) => {
-  res.json(await listFlashes(typeof req.query.mac === "string" ? req.query.mac : null));
+  await sendDb(res, () => listFlashes(typeof req.query.mac === "string" ? req.query.mac : null));
 });
 
 app.get("/api/accept/:sku", (req, res) => {
@@ -407,7 +415,7 @@ app.post("/api/monitor", async (req, res) => {
 try {
   await initDb();
 } catch (error) {
-  console.error("Postgres is required. Start it with: npm run db:up");
+  console.error("Postgres is required.");
   console.error(error.message);
   process.exit(1);
 }

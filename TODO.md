@@ -21,7 +21,17 @@ LLM is optional: set `SOS_LLM_KEY` or `OPENAI_API_KEY` to add a short interpreta
 
 ## 3. [todo] Provision kit identity over USB
 
-Slot is notes in SQLite; the chip still learns identity via captive portal / NVS. After a passing flash, write slot / hostname / optional WiFi from the bench. Portal stays for field reconfig.
+**Yes: slot is assigned in the console** (`01` → display name `my-hro-kiosk-01`). That is already a Settings field.
+
+What it does **today:** PATCH `/api/kiosks/:mac` writes `slot` / `name` on the `kiosks` row. The ESP32 never sees it. After a flash the chip still comes up as an unconfigured kit and learns hostname / Wi-Fi / secrets only through the captive portal → NVS.
+
+What this item is: after a **passing** USB flash, the bench should push the console slot onto the chip over serial (same port, no extra image):
+
+- hostname `my-hro-kiosk-nn` (from slot)
+- optional bench Wi-Fi so it can join without standing at the portal
+- leave the portal in firmware for field reconfig
+
+Still **one binary per SKU**. Do not bake slot into the sketch. Console is source of truth for which physical kit this MAC is; USB is how that identity gets into NVS.
 
 ## 4. [done] Kiosk ledger is Postgres
 

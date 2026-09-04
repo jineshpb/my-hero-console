@@ -8,14 +8,32 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 const schemaPath = path.join(dir, "schema.sql");
 const sqlitePath = path.join(DATA_DIR, "fleet.sqlite");
 
-export const DATABASE_URL =
-  process.env.DATABASE_URL || "postgres://myhero:myhero@127.0.0.1:5432/myhero";
+const LOCAL_DATABASE_URL = "postgres://myhero:myhero@127.0.0.1:5432/myhero";
+
+const describeDb = (url) => {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}:${parsed.port || "5432"}${parsed.pathname}`;
+  } catch {
+    return "invalid DATABASE_URL";
+  }
+};
+
+const poolOptions = (connectionString) => ({
+  connectionString,
+  connectionTimeoutMillis: 8000,
+});
+
+export let DATABASE_URL = process.env.DATABASE_URL || LOCAL_DATABASE_URL;
+
+let pool = new pg.Pool(poolOptions(DATABASE_URL));
+
+const openPool = (url) => {
+  DATABASE_URL = url;
+  pool = new pg.Pool(poolOptions(url));
+};
 
 export const LOG_TAIL_BYTES = 512 * 1024;
-
-const pool = new pg.Pool({
-  connectionString: DATABASE_URL,
-});
 
 export const tailLog = (text) => {
   if (!text) {
@@ -157,19 +175,42 @@ const migrateSqliteIfEmpty = async (client) => {
 };
 
 export const initDb = async () => {
-  const client = await pool.connect();
-  try {
-    const schema = fs.readFileSync(schemaPath, "utf8");
-    for (const statement of schema
-      .split(";")
-      .map((part) => part.trim())
-      .filter(Boolean)) {
-      await client.query(statement);
+  const preferred = process.env.DATABASE_URL || LOCAL_DATABASE_URL;
+  const urls = [...new Set([preferred, LOCAL_DATABASE_URL])];
+  let lastError;
+
+  for (const url of urls) {
+    if (url !== DATABASE_URL) {
+      await pool.end().catch(() => {});
+      openPool(url);
     }
-    await migrateSqliteIfEmpty(client);
-  } finally {
-    client.release();
+    try {
+      const client = await pool.connect();
+      try {
+        const schema = fs.readFileSync(schemaPath, "utf8");
+        for (const statement of schema
+          .split(";")
+          .map((part) => part.trim())
+          .filter(Boolean)) {
+          await client.query(statement);
+        }
+        await migrateSqliteIfEmpty(client);
+      } finally {
+        client.release();
+      }
+      if (url !== preferred) {
+        console.warn(`Using local Postgres ${describeDb(url)}; remote ${describeDb(preferred)} is unreachable`);
+      } else {
+        console.log(`Postgres ${describeDb(url)}`);
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      console.error(`Postgres ${describeDb(url)} failed: ${error.message}`);
+    }
   }
+
+  throw lastError;
 };
 
 export const upsertKiosk = async ({ mac, usbSerial, chipModel, port }) => {
