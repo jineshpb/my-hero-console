@@ -1,3 +1,7 @@
+# Local bench: `npm run db:up` still starts only postgres.
+# Trial (API + UI in one container): `docker compose up --build`
+# Identify/Flash stay on the USB machine. This stack is the console + kit webhooks.
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -15,6 +19,31 @@ services:
       interval: 2s
       timeout: 5s
       retries: 20
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://myhero:myhero@postgres:5432/myhero}
+      PORT: "3848"
+      LISTEN_HOST: 0.0.0.0
+      CLIENT_DIST: /app/client/dist
+    ports:
+      - "${TRIAL_PORT:-8080}:3848"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3848/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 volumes:
   myhero-pg:

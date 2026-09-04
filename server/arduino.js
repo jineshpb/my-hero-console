@@ -131,6 +131,29 @@ const runStream = (command, args, options = {}) =>
     });
     let combined = "";
     let lineBuf = "";
+    let settled = false;
+    let cancelled = Boolean(options.signal?.aborted);
+
+    const finish = (ok, error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+      if (ok) {
+        resolve(combined.trim());
+        return;
+      }
+      const wrapped = error || new Error("Command failed");
+      wrapped.stdout = combined;
+      wrapped.log = combined;
+      if (cancelled) {
+        wrapped.cancelled = true;
+        wrapped.message = "Cancelled";
+      }
+      reject(wrapped);
+    };
 
     const handleChunk = (chunk) => {
       const text = chunk.toString();
@@ -146,38 +169,42 @@ const runStream = (command, args, options = {}) =>
       }
     };
 
+    const onAbort = () => {
+      cancelled = true;
+      killProcess(child);
+    };
+
     child.stdout.on("data", handleChunk);
     child.stderr.on("data", handleChunk);
 
     const timer = setTimeout(() => {
-      child.kill();
-      const error = new Error(`Timed out after ${options.timeout ?? 120000}ms`);
-      error.stdout = combined;
-      error.log = combined;
-      reject(error);
+      killProcess(child);
+      finish(false, new Error(`Timed out after ${options.timeout ?? 120000}ms`));
     }, options.timeout ?? 120000);
 
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      error.stdout = combined;
-      error.log = combined;
-      reject(error);
-    });
-
+    child.on("error", (error) => finish(false, error));
     child.on("close", (code) => {
-      clearTimeout(timer);
       if (lineBuf.trim()) {
         options.onLine?.(lineBuf.trim());
       }
-      if (code === 0) {
-        resolve(combined.trim());
+      if (cancelled) {
+        finish(false, new Error("Cancelled"));
         return;
       }
-      const error = new Error(combined.slice(-4000) || `Command failed (${code})`);
-      error.stdout = combined;
-      error.log = combined;
-      reject(error);
+      if (code === 0) {
+        finish(true);
+        return;
+      }
+      finish(false, new Error(combined.slice(-4000) || `Command failed (${code})`));
     });
+
+    if (options.signal) {
+      if (options.signal.aborted) {
+        onAbort();
+      } else {
+        options.signal.addEventListener("abort", onAbort);
+      }
+    }
   });
 
 const runStdout = async (command, args, options = {}) => {
@@ -359,7 +386,7 @@ const resolvePython = () => {
   return findOnPath("python3") || findOnPath("python") || "python3";
 };
 
-const runEsptool = async (port, onProgress) => {
+const runEsptool = async (port, onProgress, options = {}) => {
   const onLine = (line) => {
     if (/Connecting/i.test(line)) {
       emitProgress(onProgress, { phase: "identify", percent: 6, label: `Connecting on ${port}`, detail: line });
@@ -388,7 +415,7 @@ const runEsptool = async (port, onProgress) => {
         "hard-reset",
         "read-mac",
       ],
-      { timeout: 30000, onLine }
+      { timeout: 30000, onLine, signal: options.signal }
     );
   }
   return runStream(
@@ -405,13 +432,13 @@ const runEsptool = async (port, onProgress) => {
       "hard_reset",
       "read_mac",
     ],
-    { timeout: 30000, onLine }
+    { timeout: 30000, onLine, signal: options.signal }
   );
 };
 
 // Factory Wi-Fi MAC burned into the ESP32. USB-UART serial is NOT unique on
 // CH340 clones — do not key history on that.
-export const identifyPort = async (port, onProgress) => {
+export const identifyPort = async (port, onProgress, options = {}) => {
   if (!fs.existsSync(ESPTOOL)) {
     const searched = esptoolRoots().join(", ");
     throw new Error(
@@ -419,7 +446,7 @@ export const identifyPort = async (port, onProgress) => {
     );
   }
   emitProgress(onProgress, { phase: "identify", percent: 2, label: `Reading MAC on ${port}`, detail: "" });
-  const output = await runEsptool(port, onProgress);
+  const output = await runEsptool(port, onProgress, options);
   const mac = parseMac(output);
   if (!mac) {
     throw new Error(`Could not read MAC from ${port}. Reset the board into bootloader and retry.\n${output.slice(-500)}`);
@@ -432,7 +459,60 @@ export const identifyPort = async (port, onProgress) => {
   };
 };
 
+export const throwIfAborted = (signal) => {
+  if (signal?.aborted) {
+    const error = new Error("Cancelled");
+    error.cancelled = true;
+    throw error;
+  }
+};
+
+const usbSerialOf = (ports, address) => {
+  const entry = ports.find((item) => item.address === address);
+  return (entry?.serialNumber || "").trim();
+};
+
+export const lockChipOnPort = async (port, onProgress, options = {}) => {
+  throwIfAborted(options.signal);
+  const identity = await identifyPort(port, onProgress, options);
+  const ports = await listPorts();
+  return {
+    mac: identity.mac,
+    chipModel: identity.chipModel,
+    port,
+    usbSerial: options.usbSerial || usbSerialOf(ports, port),
+  };
+};
+
+export const confirmLockedChip = async (lock, onProgress, options = {}) => {
+  throwIfAborted(options.signal);
+  const ports = await listPorts();
+  const present = ports.find((entry) => entry.address === lock.port);
+  if (!present) {
+    throw new Error(`Port ${lock.port} disappeared before upload. Plug the same board back in.`);
+  }
+  const currentUsb = usbSerialOf(ports, lock.port);
+  const lockedUsb = (lock.usbSerial || "").trim();
+  if (lockedUsb && currentUsb && lockedUsb !== currentUsb) {
+    throw new Error(
+      `USB identity changed on ${lock.port} before upload (locked ${lockedUsb}, now ${currentUsb})`
+    );
+  }
+  emitProgress(onProgress, {
+    phase: "identify",
+    percent: 66,
+    label: `Confirm MAC on ${lock.port}`,
+    detail: lock.mac,
+  });
+  const identity = await identifyPort(lock.port, onProgress, options);
+  if (identity.mac !== lock.mac) {
+    throw new Error(`Chip changed on ${lock.port} before upload (locked ${lock.mac}, now ${identity.mac})`);
+  }
+  return identity;
+};
+
 export const compileSku = async (sku, onProgress, options = {}) => {
+  throwIfAborted(options.signal);
   const sketch = await resolveSkuSketch(sku, options.sha || null);
   const files = sketch.files?.length ? sketch.files : [sketch];
   const sha = options.sha || sketch.sha || null;
@@ -485,6 +565,7 @@ export const compileSku = async (sku, onProgress, options = {}) => {
       ["compile", "--fqbn", FQBN, "--warnings", "none", "--output-dir", outputDir, sketchDir],
       {
         timeout: 300000,
+        signal: options.signal,
         onLine: (line) => {
           options.onLog?.(line);
           if (/Compiling sketch/i.test(line)) {
@@ -559,6 +640,13 @@ export const compileSku = async (sku, onProgress, options = {}) => {
     };
   } catch (error) {
     fs.rmSync(work, { recursive: true, force: true });
+    if (error.cancelled) {
+      const wrapped = new Error("Cancelled");
+      wrapped.cancelled = true;
+      wrapped.phase = "compile";
+      wrapped.log = error.stdout || error.log || "";
+      throw wrapped;
+    }
     const log = error.stdout || error.log || error.message || "";
     const wrapped = new Error((log || "Compile failed").slice(-4000));
     wrapped.log = log;
@@ -583,6 +671,7 @@ export const uploadSketch = async (sketchDir, port, onProgress, onLog, options =
     args,
     {
       timeout: 180000,
+      signal: options.signal,
       onLine: (line) => {
         onLog?.(line);
         const written = line.match(/\((\d+)\s*%\)/);
@@ -728,7 +817,9 @@ export const captureSerial = async (port, onProgress, onLog, options = {}) => {
     label: `Serial ${port} @ ${baud}`,
     detail: `${Math.round(durationMs / 1000)}s boot capture`,
   });
+  throwIfAborted(options.signal);
   await sleep(options.settleMs ?? 1500);
+  throwIfAborted(options.signal);
 
   let lastError = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -741,6 +832,9 @@ export const captureSerial = async (port, onProgress, onLog, options = {}) => {
       });
     } catch (error) {
       lastError = error;
+      if (options.signal?.aborted || error.cancelled) {
+        throw error;
+      }
       onLog?.(`monitor retry ${attempt}: ${error.message}`);
       await sleep(1000);
     }

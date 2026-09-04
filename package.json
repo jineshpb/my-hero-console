@@ -9,6 +9,7 @@
     "dev": "concurrently -n api,ui -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
     "predev": "npm run db:up",
     "db:up": "docker compose up -d --wait postgres",
+    "trial": "docker compose up --build",
     "start": "npm run start -w server"
   },
   "devDependencies": {

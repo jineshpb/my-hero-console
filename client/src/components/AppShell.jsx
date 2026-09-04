@@ -190,7 +190,7 @@ export const AppShell = () => {
         </header>
 
         <main className="min-h-0 flex-1 overflow-y-auto">
-          <div className="w-full px-8 py-10 xl:px-32">
+          <div className="mx-auto w-full max-w-7xl px-8 py-10">
             {!isKioskDetail && (error || notice) ? (
               <div className="mb-6">
                 <ConsoleAlert

@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useConsole } from "@/context/ConsoleContext";
-import { formatCommit, kioskIdToMac, kioskName, portSelectOptions } from "@/lib/kiosk";
+import { formatCommit, findKiosk, kioskName, portSelectOptions } from "@/lib/kiosk";
 
 export const FlashPanel = () => {
   const location = useLocation();
@@ -28,15 +28,13 @@ export const FlashPanel = () => {
     progress,
     elapsed,
     liveLog,
+    flashSkip,
     handleFlash,
+    handleCancelFlash,
   } = useConsole();
 
   const routeId = location.pathname.match(/^\/kiosks\/([^/]+)/)?.[1];
-  const pageMac = routeId ? kioskIdToMac(routeId) : "";
-  const target =
-    kiosks.find((board) => board.mac === identity?.mac) ||
-    kiosks.find((board) => board.mac === pageMac) ||
-    null;
+  const target = findKiosk(kiosks, routeId) || kiosks.find((board) => board.mac === identity?.mac) || null;
   const canClose = busy !== "flash";
 
   const handleOpenChange = (open) => {
@@ -97,15 +95,46 @@ export const FlashPanel = () => {
                 options={portSelectOptions(ports, portsLoading)}
               />
             </div>
-            <Button
-              type="button"
-              className="w-full"
-              onClick={handleFlash}
-              disabled={!port || !skuId || Boolean(busy)}
-              aria-label="Compile and upload firmware to the plugged-in board"
-            >
-              {busy === "flash" ? "Flashing…" : "Start flash"}
-            </Button>
+            <div className="flex w-full min-w-0 flex-col gap-2">
+              <Button
+                type="button"
+                className="w-full"
+                onClick={() => handleFlash(target?.id)}
+                disabled={!port || !skuId || Boolean(busy)}
+                aria-label="Compile and upload firmware to the plugged-in board"
+              >
+                {busy === "flash" ? "Flashing…" : "Start flash"}
+              </Button>
+              {busy === "flash" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={handleCancelFlash}
+                  aria-label="Cancel the flash job"
+                >
+                  Cancel
+                </Button>
+              ) : null}
+              {flashSkip ? (
+                <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
+                  <p className="text-muted-foreground">
+                    {flashSkip.mac} already has a passing write of {flashSkip.sku} @{" "}
+                    {flashSkip.git?.shortSha || flashSkip.gitSha}. Compile and upload were skipped.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="mt-2 w-full"
+                    onClick={() => handleFlash(target?.id, { force: true })}
+                    disabled={!port || !skuId || Boolean(busy)}
+                    aria-label="Flash this firmware to the board anyway"
+                  >
+                    Flash anyway
+                  </Button>
+                </div>
+              ) : null}
+            </div>
           </div>
           {progress?.mode === "flash" ? (
             <div className="mt-4 flex min-h-0 min-w-0 flex-1 flex-col">

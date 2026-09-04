@@ -33,6 +33,8 @@ export const ConsoleProvider = ({ children }) => {
   const [ready, setReady] = useState(false);
   const [flashPanelOpen, setFlashPanelOpen] = useState(false);
   const monitorAbortRef = useRef(null);
+  const flashAbortRef = useRef(null);
+  const [flashSkip, setFlashSkip] = useState(null);
 
   const applyPortList = useCallback((portList) => {
     if (!Array.isArray(portList)) {
@@ -129,6 +131,10 @@ export const ConsoleProvider = ({ children }) => {
     return () => clearInterval(timer);
   }, [busy]);
 
+  useEffect(() => {
+    setFlashSkip(null);
+  }, [skuId, sha, port]);
+
   const handleProgressEvent = (mode, event) => {
     if (event.type === "log") {
       const chunk = event.text || (event.line ? `${event.line}\n` : "");
@@ -153,7 +159,7 @@ export const ConsoleProvider = ({ children }) => {
     }));
   };
 
-  const handleIdentify = async () => {
+  const handleIdentify = async (kioskId) => {
     setError("");
     setNotice("");
     setBusy("identify");
@@ -166,8 +172,10 @@ export const ConsoleProvider = ({ children }) => {
     });
     try {
       const usbSerial = ports.find((item) => item.address === port)?.serialNumber;
-      const result = await streamApi("/api/identify", { port, usbSerial }, (event) =>
-        handleProgressEvent("identify", event)
+      const result = await streamApi(
+        "/api/identify",
+        { port, usbSerial, kioskId: kioskId || undefined },
+        (event) => handleProgressEvent("identify", event)
       );
       setProgress((current) => ({
         ...(current || {}),
@@ -177,7 +185,7 @@ export const ConsoleProvider = ({ children }) => {
         label: `Board ${result.mac}`,
       }));
       setIdentity(result);
-      setNotice(`Board ${result.mac}`);
+      setNotice(result.name ? `Bound ${result.name} to ${result.mac}` : `Board ${result.mac}`);
       await refresh();
       return result;
     } catch (err) {
@@ -189,11 +197,12 @@ export const ConsoleProvider = ({ children }) => {
     }
   };
 
-  const handleFlash = async () => {
+  const handleFlash = async (kioskId, options = {}) => {
     setFlashPanelOpen(true);
     setError("");
     setNotice("");
     setLiveLog("");
+    setFlashSkip(null);
     setBusy("flash");
     setProgress({
       mode: "flash",
@@ -202,11 +211,40 @@ export const ConsoleProvider = ({ children }) => {
       label: "Starting flash…",
       detail: "",
     });
+    flashAbortRef.current?.abort();
+    const controller = new AbortController();
+    flashAbortRef.current = controller;
     try {
       const usbSerial = ports.find((item) => item.address === port)?.serialNumber;
-      const result = await streamApi("/api/flash", { sku: skuId, port, usbSerial, sha }, (event) =>
-        handleProgressEvent("flash", event)
+      const result = await streamApi(
+        "/api/flash",
+        {
+          sku: skuId,
+          port,
+          usbSerial,
+          sha,
+          kioskId: kioskId || undefined,
+          force: Boolean(options.force),
+        },
+        (event) => handleProgressEvent("flash", event),
+        { signal: controller.signal }
       );
+      if (result.skipped) {
+        setFlashSkip(result);
+        setProgress({
+          mode: "flash",
+          phase: "done",
+          percent: 100,
+          label: `Already on ${result.sku} @ ${result.git?.shortSha || result.gitSha}`,
+          detail: "Passing write on this MAC — skipped compile and upload",
+        });
+        setIdentity({ mac: result.mac });
+        setNotice(
+          `${result.mac} already has a passing write of ${result.sku} @ ${result.git?.shortSha || result.gitSha}`
+        );
+        await refresh();
+        return result;
+      }
       setProgress({
         mode: "flash",
         phase: "done",
@@ -218,8 +256,13 @@ export const ConsoleProvider = ({ children }) => {
       });
       setIdentity({ mac: result.mac });
       const acceptBit = result.accept ? ` · ${result.accept.score} ${result.accept.grade}` : "";
+      const provisionBit = result.provision?.ok
+        ? ` · identity ${result.provision.hostname}`
+        : result.provision?.hostname
+          ? " · identity sent, chip did not ACK"
+          : "";
       setNotice(
-        `Wrote ${result.sku} to ${result.mac} @ ${result.git?.shortSha || "?"}${result.cached ? " (cached)" : ""}${acceptBit}`
+        `Wrote ${result.sku} to ${result.mac} @ ${result.git?.shortSha || "?"}${result.cached ? " (cached)" : ""}${acceptBit}${provisionBit}`
       );
       if (result.accept?.grade === "fail") {
         setError(result.accept.summary || "Boot acceptance failed");
@@ -227,6 +270,16 @@ export const ConsoleProvider = ({ children }) => {
       await refresh();
       return result;
     } catch (err) {
+      if (err.name === "AbortError" || err.message === "Cancelled") {
+        setNotice("Flash cancelled");
+        setProgress((current) =>
+          current
+            ? { ...current, label: "Flash cancelled", detail: "" }
+            : { mode: "flash", phase: "upload", percent: 0, label: "Flash cancelled", detail: "" }
+        );
+        refresh().catch(() => {});
+        return null;
+      }
       setError(err.message);
       setProgress((current) =>
         current
@@ -236,8 +289,15 @@ export const ConsoleProvider = ({ children }) => {
       refresh().catch(() => {});
       return null;
     } finally {
+      if (flashAbortRef.current === controller) {
+        flashAbortRef.current = null;
+      }
       setBusy("");
     }
+  };
+
+  const handleCancelFlash = () => {
+    flashAbortRef.current?.abort();
   };
 
   const handleMonitor = async () => {
@@ -372,20 +432,60 @@ export const ConsoleProvider = ({ children }) => {
       }
       setSha(payload.versions?.[0]?.sha || "");
       setNotice(`Firmware ${payload.shortSha || "ready"} · ${payload.versions?.length || 0} commits`);
+      return true;
     } catch (err) {
       setError(err.message);
+      return false;
     } finally {
       setPulling(false);
     }
   };
 
-  const handleSaveKiosk = async (mac, { slot, notes }) => {
+  const handleSaveKiosk = async (ref, payload) => {
     setError("");
-    await api(`/api/kiosks/${encodeURIComponent(mac)}`, {
+    await api(`/api/kiosks/${encodeURIComponent(ref)}`, {
       method: "PATCH",
-      body: JSON.stringify({ slot, notes }),
+      body: JSON.stringify(payload),
     });
     await refresh();
+  };
+
+  const handleCreateKiosk = async (payload) => {
+    setError("");
+    const created = await api("/api/kiosks", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    await refresh();
+    setNotice(`${created.name} created — bind a controller over USB`);
+    return created;
+  };
+
+  const handleDeleteKiosk = async (kioskId) => {
+    setError("");
+    await api(`/api/kiosks/${encodeURIComponent(kioskId)}`, { method: "DELETE" });
+    await refresh();
+    setNotice("Kiosk deleted");
+  };
+
+  const handleProvisionKiosk = async (kioskId) => {
+    setError("");
+    setBusy("provision");
+    try {
+      const result = await api(`/api/kiosks/${encodeURIComponent(kioskId)}/provision`, {
+        method: "POST",
+        body: JSON.stringify({ port }),
+      });
+      if (result.ok) {
+        setNotice(`Wrote identity ${result.hostname} over USB`);
+      } else {
+        setError("Chip did not ACK identity. Firmware still needs MHCFG, or use the captive portal.");
+      }
+      await refresh();
+      return result;
+    } finally {
+      setBusy("");
+    }
   };
 
   const value = useMemo(
@@ -421,6 +521,7 @@ export const ConsoleProvider = ({ children }) => {
       ready,
       flashPanelOpen,
       setFlashPanelOpen,
+      flashSkip,
       setNotice,
       dismissAlerts: () => {
         setError("");
@@ -429,11 +530,15 @@ export const ConsoleProvider = ({ children }) => {
       refresh,
       handleIdentify,
       handleFlash,
+      handleCancelFlash,
       handleMonitor,
       handleToggleLog,
       handlePull,
       handleSaveFirmwareSource,
       handleSaveKiosk,
+      handleCreateKiosk,
+      handleDeleteKiosk,
+      handleProvisionKiosk,
       setError,
     }),
     [
@@ -462,6 +567,7 @@ export const ConsoleProvider = ({ children }) => {
       logLoadingId,
       ready,
       flashPanelOpen,
+      flashSkip,
       refresh,
     ]
   );

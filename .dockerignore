@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+client/dist
+server/data
+.git
+.gitignore
+.env
+*.sqlite
+*.sqlite-journal
+.DS_Store
+agent-transcripts

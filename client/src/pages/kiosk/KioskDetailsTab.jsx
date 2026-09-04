@@ -27,6 +27,41 @@ export const KioskDetailsTab = () => {
         <CardContent>
           <dl>
             <DetailRow label="Name">{name}</DetailRow>
+            <DetailRow label="Slot">{board.slot || "—"}</DetailRow>
+            <DetailRow label="Controller">{board.mac || "Awaiting USB bind"}</DetailRow>
+            <DetailRow label="Identity">
+              {board.provisioned_at
+                ? `${board.provisioned_hostname || name} · written ${formatTime(board.provisioned_at)}`
+                : board.mac
+                  ? "Not written to chip yet"
+                  : "Bind USB, then flash"}
+            </DetailRow>
+            <DetailRow label="Device ID">
+              <span className="font-mono text-xs">{board.device_id || "—"}</span>
+            </DetailRow>
+            <DetailRow label="Device name">{board.device_name || "—"}</DetailRow>
+            <DetailRow label="Location">{board.location_label || "—"}</DetailRow>
+            <DetailRow label="Kit ID">
+              <span className="font-mono text-xs">{board.kit_id || "—"}</span>
+            </DetailRow>
+            <DetailRow label="Status fields">
+              {board.status_extended === "1" ? "Extended telemetry on" : "Original three-field ping"}
+            </DetailRow>
+            <DetailRow label="SOS API">
+              <span className="break-all font-mono text-xs">{board.webhook_url || "—"}</span>
+            </DetailRow>
+            <DetailRow label="Status API">
+              <span className="break-all font-mono text-xs">{board.heartbeat_url || "—"}</span>
+            </DetailRow>
+            <DetailRow label="Credentials">
+              {[
+                board.kit_secret ? "kit secret" : null,
+                board.status_hash ? "status hash" : null,
+                board.access_pin ? "service PIN" : null,
+              ]
+                .filter(Boolean)
+                .join(" · ") || "Not set"}
+            </DetailRow>
             <DetailRow label="SKU">{board.last_sku || "—"}</DetailRow>
             <DetailRow label="Firmware">
               <span className="font-mono text-xs">{shortSha(board.last_sha)}</span>

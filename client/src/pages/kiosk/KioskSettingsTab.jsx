@@ -1,86 +1,169 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { KitIdentityFields } from "@/components/KitIdentityFields";
 import { useKiosk } from "@/hooks/useKiosk";
-import { portSelectOptions } from "@/lib/kiosk";
+import { kitIdentityFromKiosk, kitIdentityPayload, kioskName, portSelectOptions } from "@/lib/kiosk";
 
 export const KioskSettingsTab = () => {
+  const navigate = useNavigate();
   const {
     board,
     ports,
     portsLoading,
     port,
     setPort,
+    busy,
     handleSaveKiosk,
+    handleIdentify,
+    handleProvisionKiosk,
+    handleDeleteKiosk,
     setError,
   } = useKiosk();
-  const [slotDraft, setSlotDraft] = useState(board.slot || "");
-  const [notesDraft, setNotesDraft] = useState(board.notes || "");
+  const [draft, setDraft] = useState(() => kitIdentityFromKiosk(board));
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    setSlotDraft(board.slot || "");
-    setNotesDraft(board.notes || "");
-  }, [board.slot, board.notes]);
+    setDraft(kitIdentityFromKiosk(board));
+    setConfirmDelete(false);
+  }, [
+    board.id,
+    board.slot,
+    board.notes,
+    board.kit_id,
+    board.status_extended,
+    board.device_id,
+    board.device_name,
+    board.location_label,
+    board.webhook_url,
+    board.heartbeat_url,
+    board.kit_secret,
+    board.status_hash,
+    board.access_pin,
+  ]);
 
   const handleSaveMeta = async (event) => {
     event.preventDefault();
     try {
-      await handleSaveKiosk(board.mac, { slot: slotDraft, notes: notesDraft });
+      await handleSaveKiosk(board.id, kitIdentityPayload(draft));
     } catch (err) {
       setError(err.message);
     }
   };
 
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await handleDeleteKiosk(board.id);
+      navigate("/kiosks");
+    } catch (err) {
+      setError(err.message);
+      setDeleting(false);
+    }
+  };
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Kiosk settings</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form className="grid max-w-xl gap-4" onSubmit={handleSaveMeta}>
-          <div className="space-y-2">
-            <Label htmlFor="kiosk-slot">Slot</Label>
-            <Input
-              id="kiosk-slot"
-              className="w-24 font-mono"
-              value={slotDraft}
-              onChange={(event) => setSlotDraft(event.target.value)}
-              placeholder="01"
-              aria-label="Kit slot"
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Kiosk settings</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form className="grid max-w-xl gap-6" onSubmit={handleSaveMeta}>
+            <KitIdentityFields
+              idPrefix="kiosk"
+              mode="edit"
+              values={draft}
+              onChange={setDraft}
+              savedSecrets={{
+                kit_secret: Boolean(board.kit_secret),
+                status_hash: Boolean(board.status_hash),
+                access_pin: Boolean(board.access_pin),
+              }}
             />
-            <p className="text-xs text-muted-foreground">Becomes the display name my-hro-kiosk-nn.</p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="kiosk-notes">Notes</Label>
-            <Input
-              id="kiosk-notes"
-              value={notesDraft}
-              onChange={(event) => setNotesDraft(event.target.value)}
-              aria-label="Kiosk notes"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="settings-usb">USB port</Label>
-            <Select
-              id="settings-usb"
-              value={port}
-              onChange={setPort}
-              aria-label="USB serial port"
-              options={portSelectOptions(ports, portsLoading)}
-            />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="submit">Save</Button>
-          </div>
-        </form>
-        <p className="mt-6 font-mono text-xs text-muted-foreground">
-          Controller MAC {board.mac}
-          {board.chip_model ? ` · ${board.chip_model}` : ""}
-        </p>
-      </CardContent>
-    </Card>
+            <div className="space-y-2">
+              <Label htmlFor="settings-usb">USB port</Label>
+              <Select
+                id="settings-usb"
+                value={port}
+                onChange={setPort}
+                aria-label="USB serial port"
+                options={portSelectOptions(ports, portsLoading)}
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="submit">Save</Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => handleIdentify(board.id)}
+                disabled={!port || Boolean(busy)}
+              >
+                {board.mac ? "Rebind USB" : "Bind USB"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => handleProvisionKiosk(board.id).catch((err) => setError(err.message))}
+                disabled={!port || !board.slot || Boolean(busy)}
+              >
+                Write identity to chip
+              </Button>
+            </div>
+          </form>
+          <p className="mt-6 font-mono text-xs text-muted-foreground">
+            {board.mac ? `Controller MAC ${board.mac}` : "No controller bound yet"}
+            {board.chip_model ? ` · ${board.chip_model}` : ""}
+            {board.provisioned_hostname ? ` · NVS ${board.provisioned_hostname}` : ""}
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-destructive/40">
+        <CardHeader>
+          <CardTitle className="text-base">Delete kiosk</CardTitle>
+        </CardHeader>
+        <CardContent className="max-w-xl space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Remove {kioskName(board)} from this bench ledger. Flash history for this kit is deleted too. The
+            chip itself is not erased.
+          </p>
+          {confirmDelete ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={handleDelete}
+                disabled={deleting}
+                aria-label={`Confirm delete ${kioskName(board)}`}
+              >
+                {deleting ? "Deleting…" : "Confirm delete"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setConfirmDelete(false)}
+                disabled={deleting}
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => setConfirmDelete(true)}
+              aria-label={`Delete ${kioskName(board)}`}
+            >
+              Delete kiosk
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 };

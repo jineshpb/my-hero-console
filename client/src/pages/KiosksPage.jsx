@@ -1,158 +1,304 @@
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { Search } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { GitBranch, Plus } from "lucide-react";
+import { FirmwareSourceForm } from "@/components/FirmwareSourceForm";
+import { KitIdentityFields } from "@/components/KitIdentityFields";
+import { PresenceDot } from "@/components/PresenceDot";
+import { ViewModeTabs, isLiveView } from "@/components/ViewModeTabs";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
+import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useConsole } from "@/context/ConsoleContext";
-import { formatTime, kioskHref, kioskName, kioskStatus, portSelectOptions, shortSha } from "@/lib/kiosk";
+import { cn } from "@/lib/utils";
+import {
+  emptyKitIdentity,
+  fieldPresence,
+  formatRelative,
+  formatTime,
+  kioskHref,
+  kioskName,
+  kitIdentityPayload,
+  kioskPresence,
+  nextOpenSlot,
+  PRESENCE,
+  shortSha,
+} from "@/lib/kiosk";
+
+const FILTERS = [
+  { id: "all", label: "All available" },
+  { id: "online", label: "Online" },
+  { id: "stale", label: "Stale" },
+  { id: "offline", label: "Offline" },
+];
+
+const skuLine = (sku) => {
+  if (!sku) {
+    return "—";
+  }
+  return sku.charAt(0).toUpperCase() + sku.slice(1);
+};
 
 export const KiosksPage = () => {
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
+  const [params] = useSearchParams();
+  const live = isLiveView(params);
+  const [filter, setFilter] = useState("all");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [createDraft, setCreateDraft] = useState(() => emptyKitIdentity(""));
+  const [creating, setCreating] = useState(false);
   const {
     kiosks: allKiosks,
     ports,
-    portsLoading,
-    port,
-    setPort,
     identity,
-    busy,
-    handleIdentify,
-    refresh,
+    git,
+    handleCreateKiosk,
     setError,
   } = useConsole();
 
-  const kiosks = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return allKiosks.filter((board) => {
-      if (!needle) {
-        return true;
-      }
-      const haystack = [kioskName(board), board.mac, board.slot, board.last_sku, board.notes]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [allKiosks, query]);
+  const withPresence = useMemo(
+    () =>
+      allKiosks.map((board) => ({
+        board,
+        presence: live ? fieldPresence(board) : kioskPresence(board, ports, identity),
+      })),
+    [allKiosks, ports, identity, live]
+  );
 
-  const handleIdentifyAndOpen = async () => {
-    const result = await handleIdentify();
-    if (result?.mac) {
-      navigate(kioskHref({ mac: result.mac }));
+  const counts = useMemo(
+    () => ({
+      online: withPresence.filter((item) => item.presence === "online").length,
+      stale: withPresence.filter((item) => item.presence === "stale").length,
+      offline: withPresence.filter((item) => item.presence === "offline").length,
+    }),
+    [withPresence]
+  );
+
+  const kiosks = useMemo(() => {
+    if (filter === "all") {
+      return withPresence;
+    }
+    return withPresence.filter((item) => item.presence === filter);
+  }, [withPresence, filter]);
+
+  const firmwareUrl = git?.remote || "";
+  const firmwareHref = /^https?:\/\//i.test(firmwareUrl) ? firmwareUrl : "";
+
+  const handleOpenCreate = () => {
+    setCreateDraft(emptyKitIdentity(nextOpenSlot(allKiosks)));
+    setCreateOpen(true);
+  };
+
+  const handleCreate = async (event) => {
+    event.preventDefault();
+    setCreating(true);
+    try {
+      const created = await handleCreateKiosk(kitIdentityPayload(createDraft));
+      setCreateOpen(false);
+      navigate(kioskHref(created));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCreating(false);
     }
   };
 
   return (
-    <div>
-      <header className="mb-10 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-medium text-white">Kiosks</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {allKiosks.length} SOS kiosk{allKiosks.length === 1 ? "" : "s"} · identity is the ESP32 factory MAC
-          </p>
-        </div>
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="w-44">
-            <Label htmlFor="usb-port" className="text-xs text-muted-foreground">
-              USB port
-            </Label>
-            <Select
-              id="usb-port"
-              className="mt-1"
-              value={port}
-              onChange={setPort}
-              aria-label="USB serial port"
-              options={portSelectOptions(ports, portsLoading)}
-            />
-          </div>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={handleIdentifyAndOpen}
-            disabled={!port || Boolean(busy)}
-            aria-label="Read ESP32 MAC and open that kiosk"
-          >
-            Identify USB
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => refresh().catch((err) => setError(err.message))}
-            aria-label="Refresh kiosks and ports"
-          >
-            Refresh
-          </Button>
-        </div>
-      </header>
+    <div className="flex flex-col gap-10">
+      <ViewModeTabs />
 
-      <div className="relative mb-4">
-        <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-muted-foreground" aria-hidden="true" />
-        <Input
-          className="pl-9"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search kiosks"
-          aria-label="Search kiosks"
-        />
+      <div className="flex flex-col gap-4">
+        <div className="flex items-start gap-2">
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <h1 className="text-2xl font-medium text-white">Kiosks</h1>
+            <div className="flex items-start gap-2" aria-label="Kiosk status counts">
+              {["online", "stale", "offline"].map((id) => (
+                <span
+                  key={id}
+                  className="inline-flex h-[22px] items-center gap-1 rounded-[26px] bg-secondary px-2 py-0.5"
+                  aria-label={`${counts[id]} ${PRESENCE[id].label.toLowerCase()}`}
+                >
+                  <PresenceDot presence={id} size="badge" />
+                  <span className="text-xs font-medium text-secondary-foreground">{counts[id]}</span>
+                </span>
+              ))}
+            </div>
+            {!live && firmwareUrl ? (
+              <div className="flex items-center gap-1">
+                <GitBranch className="size-6 shrink-0" aria-hidden="true" />
+                {firmwareHref ? (
+                  <a
+                    href={firmwareHref}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="truncate text-xs font-medium text-white no-underline hover:underline"
+                  >
+                    {firmwareUrl}
+                  </a>
+                ) : (
+                  <p className="truncate text-xs font-medium text-white">{firmwareUrl}</p>
+                )}
+              </div>
+            ) : null}
+            {live ? (
+              <p className="text-xs text-muted-foreground">
+                Field presence from last heartbeat. Online is a ping in the last 15 minutes.
+              </p>
+            ) : null}
+          </div>
+          {!live ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg"
+                onClick={() => setSourceOpen(true)}
+                aria-label="Change firmware source"
+              >
+                <GitBranch className="size-4" aria-hidden="true" />
+                Change source
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg"
+                onClick={handleOpenCreate}
+                aria-label="Create a new kiosk"
+              >
+                <Plus className="size-4" aria-hidden="true" />
+                Add Kiosk
+              </Button>
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      {kiosks.length === 0 ? (
-        <Card>
-          <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            {allKiosks.length === 0
-              ? "Plug a board in and identify USB. Each kiosk is named my-hro-kiosk-nn after you assign a slot."
-              : "No kiosks match that search."}
-          </CardContent>
-        </Card>
-      ) : (
-        <ul className="space-y-3">
-          {kiosks.map((board) => {
-            const status = kioskStatus(board, ports, identity);
-            const name = kioskName(board);
-            return (
-              <li key={board.mac}>
-                <Link
-                  to={kioskHref(board)}
-                  aria-label={`Open ${name}`}
-                  className="block rounded-xl no-underline text-inherit"
+      <div className="flex flex-col gap-2">
+        <div className="flex items-start justify-between">
+          <div
+            className="inline-flex h-9 items-start rounded-lg bg-muted p-[3px]"
+            role="tablist"
+            aria-label="Filter kiosks"
+          >
+            {FILTERS.map((item) => {
+              const selected = filter === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  className={cn(
+                    "inline-flex h-full items-center rounded-md px-2.5 text-sm font-medium",
+                    selected
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => setFilter(item.id)}
                 >
-                <Card className="transition-colors hover:bg-accent/40">
-                  <CardContent className="flex items-center justify-between gap-4 py-4">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={`size-2 shrink-0 rounded-full ${status.className}`} aria-hidden="true" />
-                        <p className="truncate font-medium">{name}</p>
-                        {name === "Unassigned" ? (
-                          <Badge variant="outline">Needs slot</Badge>
-                        ) : null}
-                      </div>
-                      <p className="mt-1 truncate font-mono text-xs text-muted-foreground">{board.mac}</p>
-                    </div>
-                    <div className="hidden text-right text-sm sm:block">
-                      <p className="text-muted-foreground">{board.last_sku || "No SKU"}</p>
-                      <p className="font-mono text-xs text-muted-foreground">
-                        {shortSha(board.last_sha)}
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {kiosks.length === 0 ? (
+          <div className="rounded-lg border border-border px-3 py-10 text-center text-sm text-muted-foreground">
+            {allKiosks.length === 0
+              ? live
+                ? "No kiosks yet. Switch to Details to add one, then wait for the first status POST."
+                : "Add a kiosk and assign a slot. Plug the ESP32 in afterwards to bind the controller."
+              : "No kiosks match that filter."}
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {kiosks.map(({ board, presence }) => {
+              const name = kioskName(board);
+              const tone = PRESENCE[presence];
+              return (
+                <li key={board.id}>
+                  <Link
+                    to={kioskHref(board, { live })}
+                    aria-label={`Open ${name}, ${tone.label}`}
+                    className="flex items-start gap-2.5 rounded-lg border border-border px-3 py-2.5 text-inherit no-underline hover:bg-accent/40"
+                  >
+                    <PresenceDot presence={presence} />
+                    <div className="flex min-h-[46px] min-w-0 flex-1 flex-col justify-center gap-1">
+                      <p className="truncate text-sm font-medium text-card-foreground">{name}</p>
+                      <p className="truncate font-mono text-sm text-muted-foreground">
+                        {live
+                          ? board.kit_id || "No kit ID"
+                          : board.mac || "Awaiting USB bind"}
                       </p>
-                      <p className="text-xs text-muted-foreground">
-                        {board.last_write_at
-                          ? `Last write ${formatTime(board.last_write_at)}`
-                          : "Never written"}
-                      </p>
                     </div>
-                    <Badge variant="secondary">{status.label}</Badge>
-                  </CardContent>
-                </Card>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                    <div className="hidden min-h-[46px] min-w-0 flex-1 flex-col justify-center gap-1 text-xs text-muted-foreground sm:flex">
+                      {live ? (
+                        <>
+                          <p>Ping {formatRelative(board.last_heartbeat_at)}</p>
+                          <p>SOS {board.last_sos_at ? formatRelative(board.last_sos_at) : "never"}</p>
+                          <p>Door {board.last_door_at ? formatRelative(board.last_door_at) : "never"}</p>
+                        </>
+                      ) : (
+                        <>
+                          <p>{skuLine(board.last_sku)}</p>
+                          <p className="font-mono">{shortSha(board.last_sha)}</p>
+                          <p>{board.last_write_at ? formatTime(board.last_write_at) : "Never written"}</p>
+                        </>
+                      )}
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      <Sheet open={createOpen} onOpenChange={setCreateOpen}>
+        <SheetContent className="max-w-xl" aria-labelledby="new-kiosk-title">
+          <SheetHeader>
+            <div className="min-w-0 flex-1">
+              <SheetTitle id="new-kiosk-title">New kiosk</SheetTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Same identity fields as the kit setup portal. Bind the ESP32 over USB when it is on the bench.
+              </p>
+            </div>
+            <SheetClose onClick={() => setCreateOpen(false)} />
+          </SheetHeader>
+          <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleCreate}>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <KitIdentityFields
+                idPrefix="new"
+                mode="create"
+                values={createDraft}
+                onChange={setCreateDraft}
+              />
+            </div>
+            <div className="shrink-0 border-t px-5 py-4">
+              <Button type="submit" disabled={creating || !createDraft.slot.trim()}>
+                {creating ? "Creating…" : "Create kiosk"}
+              </Button>
+            </div>
+          </form>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={sourceOpen} onOpenChange={setSourceOpen}>
+        <SheetContent aria-labelledby="change-source-title">
+          <SheetHeader>
+            <div className="min-w-0 flex-1">
+              <SheetTitle id="change-source-title">Change source</SheetTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Firmware git used when compiling flashes on this bench.
+              </p>
+            </div>
+            <SheetClose onClick={() => setSourceOpen(false)} />
+          </SheetHeader>
+          <div className="px-5 py-4">
+            <FirmwareSourceForm onSaved={() => setSourceOpen(false)} />
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 };

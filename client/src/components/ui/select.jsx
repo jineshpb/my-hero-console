@@ -90,11 +90,12 @@ export const Select = ({
         aria-controls={listId}
         className={cn(
           nativeControlClass,
-          "w-full max-w-full min-w-0 justify-between gap-2 overflow-hidden bg-background text-left text-foreground hover:bg-accent"
+          "h-9 items-center py-0 w-full max-w-full min-w-0 justify-between gap-2 overflow-hidden bg-background text-left text-foreground hover:bg-accent"
         )}
         onClick={handleOpen}
+        title={selected?.label || undefined}
       >
-        <span className="w-0 min-w-0 flex-1 overflow-hidden break-words text-left leading-snug">
+        <span className="min-w-0 flex-1 truncate text-left leading-none">
           {selected?.label || "Select"}
         </span>
         <ChevronDown className="size-4 shrink-0 opacity-60" aria-hidden="true" />

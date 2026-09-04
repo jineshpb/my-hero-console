@@ -24,7 +24,7 @@ History lives in **Postgres** (`kiosks` + `flashes`). Start it with `npm run db:
 
 On first boot, existing `server/data/fleet.sqlite` is imported into Postgres and left in place as a backup.
 
-Kit slot / hostname / secrets still live in NVS on the device (captive portal / `/config`). After a flash, set slot `01`–`05` in Settings so the MAC maps to `my-hro-kiosk-nn`.
+Kit slot is assigned in the console first (`New kiosk`). Identify/Flash on that kiosk binds the factory MAC. After a passing flash the bench writes `MHCFG hostname=my-hro-kiosk-nn` over USB (optional `BENCH_WIFI_SSID` / `BENCH_WIFI_PASSWORD`). Firmware should persist that to NVS and print `MHCFG OK`. Portal stays for field reconfig.
 
 ## SKUs
 
@@ -56,9 +56,10 @@ npm run dev
 
 ## Flow for the local agent
 
-1. Plug the ESP32 in. **Refresh** until the port appears (`COM*` or `/dev/ttyUSB*` / `ttyACM*`).
-2. **Identify** — reads MAC, upserts the board. Assign **slot** if you know which kit it is.
-3. Pick SKU and a **firmware version** (git commit + message). **Pull from GitHub** fetches the firmware remote. **Flash** compiles that commit’s sketch in a temp dir (`git show`, no checkout) → `arduino-cli upload`.
+1. **New kiosk** — assign slot `01`–`nn` in the UI. No USB yet.
+2. Plug the ESP32 in. **Refresh** until the port appears (`COM*` or `/dev/ttyUSB*` / `ttyACM*`).
+3. Open that kiosk → **Bind USB** / **Identify** — reads MAC onto this kiosk row.
+4. Pick SKU and a **firmware version** (git commit + message). **Pull from GitHub** fetches the firmware remote. **Flash** compiles that commit’s sketch in a temp dir (`git show`, no checkout) → `arduino-cli upload`. A passing accept test then sends `MHCFG` identity over serial.
 4. Do not promise OTA. USB only. No remote deploy from the VPS.
 
 ## If you change firmware
