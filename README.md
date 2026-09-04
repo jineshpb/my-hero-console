@@ -22,9 +22,7 @@ One `app` container that serves the UI and `/api`. Postgres is already on Dokplo
 docker compose up --build
 ```
 
-- Console: http://127.0.0.1:8080
-- Heartbeat: `POST http://127.0.0.1:8080/api/v1/sos/status`
-- SOS: `POST http://127.0.0.1:8080/api/v1/sos/trigger`
-- Door: `POST http://127.0.0.1:8080/api/v1/sos/door`
-
-Change the published trial port with `TRIAL_PORT=3000`.
+- Console: http://127.0.0.1:3848
+- Heartbeat: `POST http://127.0.0.1:3848/api/v1/sos/status`
+- SOS: `POST http://127.0.0.1:3848/api/v1/sos/trigger`
+- Door: `POST http://127.0.0.1:3848/api/v1/sos/door`

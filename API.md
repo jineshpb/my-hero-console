@@ -10,20 +10,12 @@ Field kits POST JSON to this console. The chip must be able to reach the host â€
 
 Aliases without `/v1` work: `/api/sos/status`, `/api/sos/trigger`, `/api/sos/door`.
 
-Local bench: `http://127.0.0.1:3848`. Docker trial: `http://127.0.0.1:8080` (same paths). Example full URLs:
+Local bench and Docker: `http://127.0.0.1:3848`. Example full URLs:
 
 ```
 http://127.0.0.1:3848/api/v1/sos/status
 http://127.0.0.1:3848/api/v1/sos/trigger
 http://127.0.0.1:3848/api/v1/sos/door
-```
-
-Trial (compose `app` on port 8080):
-
-```
-http://127.0.0.1:8080/api/v1/sos/status
-http://127.0.0.1:8080/api/v1/sos/trigger
-http://127.0.0.1:8080/api/v1/sos/door
 ```
 
 `GET /api/v1/sos` returns this contract as JSON. `hash` is auth only and is never stored.

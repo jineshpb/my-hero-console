@@ -12,7 +12,7 @@ services:
       LISTEN_HOST: 0.0.0.0
       CLIENT_DIST: /app/client/dist
     ports:
-      - "${TRIAL_PORT:-8080}:3848"
+      - "3848:3848"
     healthcheck:
       test:
         [
