@@ -1,38 +1,18 @@
-# Local bench: `npm run db:up` still starts only postgres.
-# Trial (API + UI in one container): `docker compose up --build`
-# Identify/Flash stay on the USB machine. This stack is the console + kit webhooks.
+# App only. Postgres is the existing Dokploy service — set DATABASE_URL.
+# Trial: `docker compose up --build`
+# Identify/Flash stay on the USB machine.
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: myhero-console-pg
-    environment:
-      POSTGRES_USER: myhero
-      POSTGRES_PASSWORD: myhero
-      POSTGRES_DB: myhero
-    ports:
-      - "5432:5432"
-    volumes:
-      - myhero-pg:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U myhero -d myhero"]
-      interval: 2s
-      timeout: 5s
-      retries: 20
-
   app:
     build: .
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://myhero:myhero@postgres:5432/myhero}
+      DATABASE_URL: ${DATABASE_URL}
       PORT: "3848"
       LISTEN_HOST: 0.0.0.0
       CLIENT_DIST: /app/client/dist
     ports:
       - "${TRIAL_PORT:-8080}:3848"
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
       test:
         [
@@ -44,6 +24,3 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-
-volumes:
-  myhero-pg:

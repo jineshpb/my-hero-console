@@ -196,8 +196,7 @@ const addKioskIdentityColumns = async (client) => {
 
 export const initDb = async () => {
   const preferred = process.env.DATABASE_URL || LOCAL_DATABASE_URL;
-  const composeUrl = "postgres://myhero:myhero@postgres:5432/myhero";
-  const urls = [...new Set([preferred, composeUrl, LOCAL_DATABASE_URL])];
+  const urls = [...new Set([preferred, LOCAL_DATABASE_URL])];
   let lastError;
 
   for (const url of urls) {

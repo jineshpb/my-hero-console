@@ -1,3 +1,4 @@
+# Unused if Postgres is already a Dokploy database service.
 # Postgres ledger for Dokploy. USB flashing stays on the bench; this is the database only.
 # Dokploy: Add Service → Compose → Docker Compose → compose path ./docker-compose.dokploy.yml
 # Environment: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_PORT
