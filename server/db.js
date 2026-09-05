@@ -331,6 +331,20 @@ const trimToNull = (value) => {
   return text.length ? text : null;
 };
 
+const normalizeMac = (value) => {
+  const raw = trimToNull(value);
+  if (!raw) {
+    return null;
+  }
+  const hex = raw.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+  if (hex.length !== 12) {
+    const error = new Error("MAC must be 12 hex digits");
+    error.status = 400;
+    throw error;
+  }
+  return hex.match(/.{2}/g).join(":");
+};
+
 const clampText = (value, max) => {
   if (value == null) {
     return null;
@@ -891,25 +905,29 @@ export const createKiosk = async (input = {}) => {
     throw error;
   }
   const identity = fillDerivedIdentity(readKitIdentity(input), normalized);
+  const mac = input.mac === undefined || input.mac === "" ? null : normalizeMac(input.mac);
   try {
     const { rows } = await pool.query(
       `INSERT INTO kiosks (
-         mac, name, slot, notes,
+         mac, name, slot, notes, last_port, chip_model,
          kit_id, kit_secret, status_hash, status_extended, access_pin,
          device_id, device_name, location_label, webhook_url, heartbeat_url,
          first_seen_at, last_seen_at, updated_at
        )
        VALUES (
-         NULL, $1, $2, $3,
-         $4, $5, $6, $7, $8,
-         $9, $10, $11, $12, $13,
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, $9, $10, $11,
+         $12, $13, $14, $15, $16,
          now(), now(), now()
        )
        RETURNING *`,
       [
+        mac,
         nameFromSlot(normalized),
         normalized,
         trimToNull(input.notes),
+        trimToNull(input.last_port),
+        trimToNull(input.chip_model),
         identity.kit_id,
         identity.kit_secret,
         identity.status_hash,
@@ -925,7 +943,11 @@ export const createKiosk = async (input = {}) => {
     return rows[0];
   } catch (error) {
     if (error.code === "23505") {
-      const conflict = new Error(`Slot ${normalized} is already assigned`);
+      const conflict = new Error(
+        error.constraint?.includes("mac")
+          ? `MAC ${mac} is already assigned`
+          : `Slot ${normalized} is already assigned`
+      );
       conflict.status = 409;
       throw conflict;
     }
@@ -1005,13 +1027,27 @@ export const setKioskMeta = async (ref, input = {}) => {
   }
   const normalized = input.slot === undefined ? kiosk.slot : normalizeSlot(input.slot);
   const nextNotes = input.notes === undefined ? kiosk.notes : trimToNull(input.notes);
+  const nextMac = input.mac === undefined ? kiosk.mac : normalizeMac(input.mac);
   const identity = fillDerivedIdentity(readKitIdentity(input, kiosk), normalized);
+  if (nextMac && nextMac !== kiosk.mac) {
+    const { rows: taken } = await pool.query(
+      "SELECT id, name, slot FROM kiosks WHERE mac = $1 AND id <> $2",
+      [nextMac, kiosk.id]
+    );
+    if (taken[0]) {
+      const conflict = new Error(
+        `MAC ${nextMac} already belongs to ${taken[0].name || `slot ${taken[0].slot}` || taken[0].id}`
+      );
+      conflict.status = 409;
+      throw conflict;
+    }
+  }
   try {
     const { rowCount } = await pool.query(
       `UPDATE kiosks
-       SET slot = $2, notes = $3, name = $4,
-           kit_id = $5, kit_secret = $6, status_hash = $7, status_extended = $8, access_pin = $9,
-           device_id = $10, device_name = $11, location_label = $12, webhook_url = $13, heartbeat_url = $14,
+       SET slot = $2, notes = $3, name = $4, mac = $5,
+           kit_id = $6, kit_secret = $7, status_hash = $8, status_extended = $9, access_pin = $10,
+           device_id = $11, device_name = $12, location_label = $13, webhook_url = $14, heartbeat_url = $15,
            updated_at = now()
        WHERE id = $1`,
       [
@@ -1019,6 +1055,7 @@ export const setKioskMeta = async (ref, input = {}) => {
         normalized,
         nextNotes,
         nameFromSlot(normalized),
+        nextMac,
         identity.kit_id,
         identity.kit_secret,
         identity.status_hash,
@@ -1034,7 +1071,11 @@ export const setKioskMeta = async (ref, input = {}) => {
     return rowCount > 0;
   } catch (error) {
     if (error.code === "23505") {
-      const conflict = new Error(`Slot ${normalized} is already assigned`);
+      const conflict = new Error(
+        error.constraint?.includes("mac")
+          ? `MAC ${nextMac} is already assigned`
+          : `Slot ${normalized} is already assigned`
+      );
       conflict.status = 409;
       throw conflict;
     }

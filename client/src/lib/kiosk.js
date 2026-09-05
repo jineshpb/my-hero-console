@@ -77,6 +77,9 @@ export const emptyKitIdentity = (slot = "") => {
   const derived = kitIdentityFromSlot(slot);
   return {
     slot,
+    mac: "",
+    last_port: "",
+    chip_model: "",
     notes: "",
     kit_id: "",
     kit_secret: "",
@@ -96,6 +99,9 @@ export const kitIdentityFromKiosk = (board) => {
   const derived = kitIdentityFromSlot(slot);
   return {
     slot,
+    mac: board?.mac || "",
+    last_port: board?.last_port || "",
+    chip_model: board?.chip_model || "",
     notes: board?.notes || "",
     kit_id: board?.kit_id || "",
     kit_secret: "",
@@ -126,6 +132,9 @@ export const applySlotToIdentity = (current, nextSlot) => {
 
 export const kitIdentityPayload = (draft) => ({
   slot: draft.slot,
+  mac: draft.mac,
+  last_port: draft.last_port,
+  chip_model: draft.chip_model,
   notes: draft.notes,
   kit_id: draft.kit_id,
   kit_secret: draft.kit_secret,

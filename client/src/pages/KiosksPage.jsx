@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { GitBranch, Plus } from "lucide-react";
 import { FirmwareSourceForm } from "@/components/FirmwareSourceForm";
 import { KitIdentityFields } from "@/components/KitIdentityFields";
+import { PluggedInPanel } from "@/components/PluggedInPanel";
 import { PresenceDot } from "@/components/PresenceDot";
 import { ViewModeTabs, isLiveView } from "@/components/ViewModeTabs";
 import { Button } from "@/components/ui/button";
@@ -52,6 +53,8 @@ export const KiosksPage = () => {
     identity,
     git,
     handleCreateKiosk,
+    setPort,
+    setIdentity,
     setError,
   } = useConsole();
 
@@ -85,6 +88,22 @@ export const KiosksPage = () => {
 
   const handleOpenCreate = () => {
     setCreateDraft(emptyKitIdentity(nextOpenSlot(allKiosks)));
+    setCreateOpen(true);
+  };
+
+  const handleOnboard = (chip) => {
+    setPort(chip.port);
+    setIdentity({
+      mac: chip.mac,
+      chipModel: chip.chipModel,
+      port: chip.port,
+    });
+    setCreateDraft({
+      ...emptyKitIdentity(nextOpenSlot(allKiosks)),
+      mac: chip.mac,
+      last_port: chip.port,
+      chip_model: chip.chipModel || "",
+    });
     setCreateOpen(true);
   };
 
@@ -171,6 +190,8 @@ export const KiosksPage = () => {
           ) : null}
         </div>
       </div>
+
+      {!live ? <PluggedInPanel onOnboard={handleOnboard} /> : null}
 
       <div className="flex flex-col gap-2">
         <div className="flex items-start justify-between">
@@ -260,7 +281,9 @@ export const KiosksPage = () => {
             <div className="min-w-0 flex-1">
               <SheetTitle id="new-kiosk-title">New kiosk</SheetTitle>
               <p className="mt-1 text-sm text-muted-foreground">
-                Same identity fields as the kit setup portal. Bind the ESP32 over USB when it is on the bench.
+                {createDraft.mac
+                  ? `Onboarding ${createDraft.mac}. Slot and kit fields can still be edited.`
+                  : "Same identity fields as the kit setup portal. Plug the ESP32 in first to auto-identify."}
               </p>
             </div>
             <SheetClose onClick={() => setCreateOpen(false)} />

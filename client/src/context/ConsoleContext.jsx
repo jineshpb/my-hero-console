@@ -197,6 +197,14 @@ export const ConsoleProvider = ({ children }) => {
     }
   };
 
+  const handlePeekIdentify = useCallback(async (serialPort, usbSerial) => {
+    return streamApi(
+      "/api/identify",
+      { port: serialPort, usbSerial, peek: true },
+      () => {}
+    );
+  }, []);
+
   const handleFlash = async (kioskId, options = {}) => {
     setFlashPanelOpen(true);
     setError("");
@@ -448,6 +456,7 @@ export const ConsoleProvider = ({ children }) => {
       body: JSON.stringify(payload),
     });
     await refresh();
+    setNotice("Kiosk details saved");
   };
 
   const handleCreateKiosk = async (payload) => {
@@ -528,7 +537,9 @@ export const ConsoleProvider = ({ children }) => {
         setNotice("");
       },
       refresh,
+      setIdentity,
       handleIdentify,
+      handlePeekIdentify,
       handleFlash,
       handleCancelFlash,
       handleMonitor,

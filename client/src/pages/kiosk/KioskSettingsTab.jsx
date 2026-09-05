@@ -32,6 +32,7 @@ export const KioskSettingsTab = () => {
     setConfirmDelete(false);
   }, [
     board.id,
+    board.mac,
     board.slot,
     board.notes,
     board.kit_id,

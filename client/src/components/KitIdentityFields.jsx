@@ -51,6 +51,29 @@ export const KitIdentityFields = ({ idPrefix, values, onChange, savedSecrets, mo
             aria-label="Kit slot"
           />
         </Field>
+        {isEdit || values.mac ? (
+          <Field
+            id={`${idPrefix}-mac`}
+            label="Controller MAC"
+            hint={
+              isEdit
+                ? "ESP32 factory Wi-Fi MAC. Blank unbinds USB identity."
+                : "Read from the plugged-in board."
+            }
+          >
+            <Input
+              id={`${idPrefix}-mac`}
+              className="font-mono"
+              value={values.mac || ""}
+              onChange={handleChange("mac")}
+              readOnly={!isEdit}
+              tabIndex={0}
+              placeholder="AA:BB:CC:DD:EE:FF"
+              maxLength={17}
+              aria-label="Controller MAC"
+            />
+          </Field>
+        ) : null}
         <Field
           id={`${idPrefix}-hostname`}
           label="Hostname"

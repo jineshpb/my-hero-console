@@ -338,6 +338,26 @@ app.post("/api/identify", async (req, res) => {
   openSse(res);
   try {
     const identity = await identifyPort(serialPort, (event) => writeSse(res, progressToEvent(event)));
+    if (req.body.peek) {
+      const existing = await getKiosk(identity.mac);
+      if (existing) {
+        await bindKioskUsb(existing.id, {
+          mac: identity.mac,
+          chipModel: identity.chipModel,
+          port: serialPort,
+          usbSerial: req.body.usbSerial,
+        });
+      }
+      writeSse(res, {
+        type: "result",
+        ...identity,
+        port: serialPort,
+        kioskId: existing?.id || null,
+        slot: existing?.slot || null,
+        name: existing?.name || null,
+      });
+      return;
+    }
     const kiosk = req.body.kioskId
       ? await bindKioskUsb(req.body.kioskId, {
           mac: identity.mac,
